@@ -70,6 +70,24 @@ daylight is genuinely coming through rather than just glinting off the
 surface. Controlled separately via `light_strength` (default 0.28) so it
 can be tuned independently of the depth vignette.
 
+v6 responds to two more requests together: (1) the stone border is thicker
+(`thick_frac` 0.032 -> 0.050) and actually textured now -- finer grain, a
+few weathering blotches, and (new) coursed seams crossing the border at
+even intervals all the way round, keyed to the arch's own perimeter
+position via `_arclen_map()` so they land evenly regardless of size/aspect
+-- reads as built ashlar stone rather than a painted ring. (2) The
+reflection is no longer one streak across the whole window: `_finish_glass`
+(renamed from `_depth_and_gloss`) now finds each individual enclosed glass
+pane (the same `labels` the inner glow/mottle already grouped panes by) and
+gives it its own small diagonal catch-light at a randomised angle and
+position, confined to real glass pixels only (never the lead, never the
+stone). The whole-window backlight glow and depth vignette stay global --
+those represent one light source and one recessed frame, which is
+physically right -- only the specular reflection moved to per-pane, since
+that's what real dozens-of-individually-set-facets leaded glass actually
+does. New `reflection`/`pane_gloss_strength` params, `--no-reflection` /
+`--pane-gloss-strength` on the CLI.
+
 Usage:
     python3 stained_glass.py IN.png OUT.png [--strength subtle|medium|strong]
 
@@ -94,16 +112,52 @@ def _cubic(p0, p1, p2, p3, steps=100):
     return pts
 
 
+def _arch_outline(w, h, straight_steps=2, curve_steps=100):
+    """The app's pointed-arch outline as a list of (x, y) pixel points, in
+    perimeter order. `straight_steps`/`curve_steps` control how finely each
+    segment is subdivided -- gothic_arch_mask only needs the polygon
+    vertices (cheap, straight_steps=2), but the stone border's coursed
+    seams need it dense and roughly evenly sampled along the curve too
+    (see _arclen_map)."""
+    def lerp_pts(p0, p1, n):
+        return [(p0[0] + (p1[0] - p0[0]) * t / n, p0[1] + (p1[1] - p0[1]) * t / n) for t in range(n + 1)]
+
+    pts = lerp_pts((0.06, 0.97), (0.06, 0.46), straight_steps)
+    pts += _cubic((0.06, 0.46), (0.06, 0.30), (0.30, 0.10), (0.5, 0.04), steps=curve_steps)[1:]
+    pts += _cubic((0.5, 0.04), (0.70, 0.10), (0.94, 0.30), (0.94, 0.46), steps=curve_steps)[1:]
+    pts += lerp_pts((0.94, 0.46), (0.94, 0.97), straight_steps)[1:]
+    pts += lerp_pts((0.94, 0.97), (0.06, 0.97), straight_steps)[1:]
+    return [(x * w, y * h) for x, y in pts]
+
+
 def gothic_arch_mask(w, h):
     """1-bit mask, True inside the app's pointed-arch window, for a W x H image."""
-    outline = [(0.06, 0.97), (0.06, 0.46)]
-    outline += _cubic((0.06, 0.46), (0.06, 0.30), (0.30, 0.10), (0.5, 0.04))[1:]
-    outline += _cubic((0.5, 0.04), (0.70, 0.10), (0.94, 0.30), (0.94, 0.46))[1:]
-    outline += [(0.94, 0.97), (0.06, 0.97)]
-    poly = [(x * w, y * h) for x, y in outline]
+    poly = _arch_outline(w, h)
     m = Image.new("L", (w, h), 0)
     ImageDraw.Draw(m).polygon(poly, fill=255)
     return np.array(m) > 0
+
+
+def _arclen_map(w, h):
+    """For every pixel, the fractional distance (0..1) along the arch's own
+    outline to the NEAREST point of that outline -- lets the stone border's
+    coursed seams follow this exact silhouette regardless of size/aspect,
+    without hand-fitting arc-length math to the bezier curves."""
+    pts = _arch_outline(w, h, straight_steps=180, curve_steps=180)
+    pts_arr = np.array(pts, dtype=np.float64)
+    seg = np.hypot(*(pts_arr[1:] - pts_arr[:-1]).T)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = cum[-1] if cum[-1] > 0 else 1.0
+    arclen_norm = (cum / total).astype(np.float32)
+
+    arclen_img = np.full((h, w), -1.0, dtype=np.float32)
+    xs = np.clip(pts_arr[:, 0].round().astype(int), 0, w - 1)
+    ys = np.clip(pts_arr[:, 1].round().astype(int), 0, h - 1)
+    arclen_img[ys, xs] = arclen_norm
+
+    known = arclen_img >= 0
+    _, (iy, ix) = ndimage.distance_transform_edt(~known, return_indices=True)
+    return arclen_img[iy, ix]
 
 
 PRESETS = {
@@ -182,16 +236,25 @@ def find_and_fill_gaps(rgb, is_line, gray_min=110, chroma_max=28, max_halfwidth=
     return fixed, gap_mask
 
 
-def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.032):
-    """A modest, UNIFORM stone surround carved just inside the arch's own
-    silhouette -- like a window's stone jambs/reveal, not a separate frame
-    stuck on top, so it needs no extra canvas margin. Same thickness all
-    the way round, including a clean flat strip along the arch's flat
-    bottom edge -- an early version tried to bulge this into buttress-style
-    piers at the base corners, but on the actual paintings that read as
-    lumpy/odd rather than architectural, so it was dropped in favour of
-    a plain, even reveal (still called a "stone border" -- the restrained,
-    even version reads as the elegant one).
+def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.050, n_courses=34):
+    """A UNIFORM stone surround carved just inside the arch's own silhouette
+    -- like a window's stone jambs/reveal, not a separate frame stuck on
+    top, so it needs no extra canvas margin. Same thickness all the way
+    round, including a clean flat strip along the arch's flat bottom edge
+    -- an early version tried to bulge this into buttress-style piers at
+    the base corners, but on the actual paintings that read as lumpy/odd
+    rather than architectural, so it was dropped in favour of a plain,
+    even reveal.
+
+    Thickened and given actual stone texture per feedback ("a bit thicker
+    with a stone texture"): finer grain, a few weathering blotches (the
+    same idea as static/textures/limestone.jpg's procedural texture, just
+    inlined here rather than shared -- this runs on a painting, that runs
+    standalone), and -- the part that makes it read as built rather than
+    painted -- coursed seams: thin dark lines crossing the border at even
+    intervals all the way round, like real ashlar voussoirs framing a
+    window. The seams are keyed to `_arclen_map()`, the arch's own
+    perimeter position, so they always land evenly regardless of size.
 
     Returns (is_border, stone_rgb) -- stone_rgb is meaningful only where
     is_border is True; the caller composites it over the glass render.
@@ -211,68 +274,101 @@ def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.032):
     stone_hi = np.array([226, 211, 176], dtype=np.float32)
     stone = stone_lo[None, None, :] * (1 - tone[..., None]) + stone_hi[None, None, :] * tone[..., None]
 
+    # Finer grain on top of the mottling -- an actual stone surface, not a
+    # smooth gradient.
+    grain = _smooth_noise(h, w, scale=6, seed=seed + 501)
+    stone = stone * (0.94 + 0.06 * grain[..., None])
+
+    # Occasional weathering blotches.
+    blotch = _smooth_noise(h, w, scale=70, seed=seed + 502)
+    blotch = np.clip((blotch - 0.55) * 2.2, 0, 1)
+    stone = stone * (1 - 0.14 * blotch[..., None]) + stone_lo[None, None, :] * (0.14 * blotch[..., None])
+
     # Relief shading: a shallow shadow where the reveal meets the glass,
     # easing to a soft highlight toward the arch's outer silhouette --
     # reads as a carved stone reveal rather than a flat painted ring.
     depth = np.clip(dist_in / np.maximum(thickness, 1e-3), 0, 1)
     stone = stone * (0.80 + 0.32 * depth)[..., None]
 
+    # Coursed-stone seams, evenly spaced along the arch's own perimeter.
+    arclen = _arclen_map(w, h)
+    phase = (arclen * n_courses) % 1.0
+    seam_dist = np.minimum(phase, 1 - phase)
+    seam = np.clip(1 - seam_dist / 0.05, 0, 1)
+    stone = stone * (1 - 0.30 * seam[..., None])
+
     # A crisp dark line right at the outer silhouette so the window reads
     # clean against whatever card background it sits on...
-    outer_line = is_border & (dist_in >= thickness - 1.4)
-    stone = np.where(outer_line[..., None], stone * 0.68, stone)
+    outer_line = is_border & (dist_in >= thickness - 1.6)
+    stone = np.where(outer_line[..., None], stone * 0.66, stone)
     # ...and a fine seam exactly where stone meets glass.
-    inner_seam = is_border & (dist_in <= 1.6)
-    stone = np.where(inner_seam[..., None], stone * 0.82, stone)
+    inner_seam = is_border & (dist_in <= 1.8)
+    stone = np.where(inner_seam[..., None], stone * 0.80, stone)
 
     return is_border, np.clip(stone, 0, 255)
 
 
-def _depth_and_gloss(rgb, w, h, strength=0.10, light_strength=0.28):
-    """A very light, cheap depth+gloss pass over the whole window (glass AND
-    stone), applied last. These avatars render small -- a seat-circle
-    thumbnail, a role-card portrait -- so this is deliberately subtle:
-    stronger than ~0.12 starts to muddy the linework at that size for no
-    real gain.
+def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
+                   depth_strength=0.10, light_strength=0.28,
+                   pane_gloss_strength=0.24):
+    """Applied last, over the whole finished window. Three ingredients:
 
-    Two ingredients, both just a per-pixel multiply/screen against the
-    already-finished image, no new geometry:
-      - a gentle vignette, darkest toward the lower corners, clear near the
-        top -- reads as the window sitting a little recessed / lit from
-        above, i.e. "depth" -- and
-      - a soft diagonal glass-glare streak from the upper-left, screen-
-        blended -- "reflection" -- fading out before it reaches the bottom.
+      - a gentle DEPTH vignette over the whole window (glass, stone, lead
+        alike) -- darkest toward the lower corners, clear near the top --
+        reads as the window sitting a little recessed.
+      - a broad, soft BACKLIGHT glow, also over the whole window -- as if
+        daylight is genuinely coming through from behind, not just glinting
+        off the surface.
+      - a PER-PANE reflection: each individual enclosed glass pane (the
+        same `labels` the inner glow/mottle earlier used) gets its own
+        small diagonal catch-light at a randomised angle/position/width,
+        confined to `glass_mask` (excludes the lead lines and the stone
+        border). Real leaded glass is dozens of individually-set, slightly
+        tilted facets; one reflection streak across the whole window always
+        read as a sticker on a flat sheet, where per-pane highlights read
+        as actual glasswork -- per feedback ("identify glass regions...
+        apply the reflection per glass panel").
+
+    These avatars render small (a seat-circle thumbnail, a role-card
+    portrait), so all three stay deliberately restrained by default.
     """
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     nx, ny = xx / w, yy / h  # 0..1 across the canvas
 
     vign = np.hypot((nx - 0.5) * 1.1, (ny - 0.62) * 1.0)
     vign = np.clip(vign - 0.32, 0, 1)
-    shade = 1.0 - strength * vign
-
-    # Primary glass-glare streak, upper-left light source.
-    d1 = (nx - ny * 0.5) - 0.12
-    gloss1 = np.exp(-(d1 ** 2) / (2 * 0.10 ** 2))
-    gloss1 *= np.clip(1.2 - ny * 1.3, 0, 1)  # fades out before the bottom
-
-    # Second, softer catch-light on the opposite diagonal -- real photographed
-    # stained glass rarely shows just one reflection band, and a second one
-    # (different angle, lower-right, weaker) reads as more convincingly
-    # "glass" rather than a single stripe.
-    d2 = (nx + ny * 0.4) - 1.0
-    gloss2 = np.exp(-(d2 ** 2) / (2 * 0.13 ** 2))
-    gloss2 *= np.clip(ny * 1.5 - 0.1, 0, 1)  # fades in before the top
-
-    gloss = np.clip(gloss1 + 0.55 * gloss2, 0, 1)
+    shade = 1.0 - depth_strength * vign
 
     # A broad, soft backlight glow -- as if daylight is actually coming
-    # through the window from behind, not just glinting off the surface.
-    # Centred a little above middle (most panes' "sky"/background area).
+    # through the window from behind. Centred a little above middle (most
+    # panes' "sky"/background area).
     bx, by = 0.5, 0.4
     backlight = np.exp(-(((nx - bx) * 1.05) ** 2 + ((ny - by) * 1.2) ** 2) / (2 * 0.30 ** 2))
 
+    pane_gloss = np.zeros((h, w), dtype=np.float32)
+    if pane_gloss_strength > 0 and n > 0:
+        objects = ndimage.find_objects(labels)
+        min_area = max(40, int(0.00006 * w * h))  # skip tiny slivers/specks
+        for idx, sl in enumerate(objects, start=1):
+            if sl is None:
+                continue
+            pane = (labels[sl] == idx) & glass_mask[sl]
+            if pane.sum() < min_area:
+                continue
+            rng = np.random.default_rng(seed * 7919 + idx)
+            ph, pw = pane.shape
+            pyy, pxx = np.mgrid[0:ph, 0:pw].astype(np.float32)
+            lnx, lny = pxx / max(pw, 1), pyy / max(ph, 1)
+            angle = np.deg2rad(rng.uniform(18, 55))
+            phase = rng.uniform(0.20, 0.55)
+            band = rng.uniform(0.20, 0.34)
+            d = lnx * np.cos(angle) + lny * np.sin(angle) - phase
+            local_gloss = np.exp(-(d ** 2) / (2 * band ** 2))
+            local_gloss = np.where(pane, local_gloss, 0.0)
+            pane_gloss[sl] = np.maximum(pane_gloss[sl], local_gloss)
+
     out = rgb * shade[..., None]
-    screen_amt = np.clip(gloss * strength * 1.05 + backlight * light_strength, 0, 0.85)
+    screen_amt = np.clip(backlight * light_strength + pane_gloss * pane_gloss_strength, 0, 0.85)
     out = out + (255.0 - out) * screen_amt[..., None]
     return np.clip(out, 0, 255)
 
@@ -284,6 +380,7 @@ def stained_glass(img: Image.Image, strength: str = "medium",
                    border: bool = True, border_seed: int = None,
                    depth: bool = True, depth_strength: float = 0.10,
                    light_strength: float = 0.28,
+                   reflection: bool = True, pane_gloss_strength: float = 0.24,
                    return_debug: bool = False):
     p = PRESETS[strength]
     rgb = np.array(img.convert("RGB")).astype(np.float32)
@@ -348,8 +445,18 @@ def stained_glass(img: Image.Image, strength: str = "medium",
         )
         out = np.where(is_border[..., None], stone_rgb, out)
 
-    if depth:
-        out = _depth_and_gloss(out, w, h, strength=depth_strength, light_strength=light_strength)
+    # The actual visible glass pixels once the stone reveal has been carved
+    # out of the arch's edge -- this is what the per-pane reflection below
+    # is confined to (never the lead lines, never the stone).
+    glass_mask = mask & (~is_border) & (~is_line)
+
+    if depth or reflection:
+        out = _finish_glass(
+            out, w, h, labels, n, glass_mask, seed=seed,
+            depth_strength=depth_strength if depth else 0.0,
+            light_strength=light_strength if depth else 0.0,
+            pane_gloss_strength=pane_gloss_strength if reflection else 0.0,
+        )
 
     out = np.clip(out, 0, 255).astype(np.uint8)
     rgba = np.dstack([out, (mask * 255).astype(np.uint8)])
@@ -369,11 +476,15 @@ def main():
     ap.add_argument("--no-border", action="store_true")
     ap.add_argument("--no-depth", action="store_true")
     ap.add_argument("--light-strength", type=float, default=0.28)
+    ap.add_argument("--no-reflection", action="store_true")
+    ap.add_argument("--pane-gloss-strength", type=float, default=0.24)
     args = ap.parse_args()
     src = Image.open(args.infile)
     out = stained_glass(src, strength=args.strength, fill_gaps=not args.no_gap_fill,
                          border=not args.no_border, depth=not args.no_depth,
-                         light_strength=args.light_strength)
+                         light_strength=args.light_strength,
+                         reflection=not args.no_reflection,
+                         pane_gloss_strength=args.pane_gloss_strength)
     out.save(args.outfile)
     print(f"saved {args.outfile} ({out.size[0]}x{out.size[1]}, strength={args.strength})")
 

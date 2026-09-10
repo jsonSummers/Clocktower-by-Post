@@ -2,6 +2,63 @@
 
 Short records of choices that would otherwise be hard to reconstruct. Newest first.
 
+## 2026-09-10b — stained-glass v6: thicker textured stone border, per-pane reflection, Empath
+
+- **`_stone_border()` thickened and textured** per feedback ("a bit thicker
+  with a stone texture"): `thick_frac` 0.032 → 0.050, plus fine grain and a
+  few weathering blotches layered onto the existing mottle. The part that
+  actually reads as *built* rather than painted is new coursed seams —
+  thin dark lines crossing the border at even intervals all the way round,
+  like real ashlar voussoirs framing a window. They're keyed to a new
+  `_arclen_map()` (nearest-point-on-outline lookup via
+  `distance_transform_edt(..., return_indices=True)` against a densely
+  resampled `_arch_outline()`), so the coursing always lands evenly around
+  the arch regardless of size/aspect rather than being hand-fit to the
+  bezier curves. `gothic_arch_mask()` now delegates to the same
+  `_arch_outline()` helper — one outline definition, two consumers.
+- **Reflection moved from one whole-window streak to per glass pane**, per
+  feedback ("identify glass regions... apply the reflection per glass
+  panel"). `_depth_and_gloss()` renamed to `_finish_glass()`; the global
+  depth vignette and backlight glow stay (one light source, one recessed
+  frame — physically right to keep global), but the specular glass-glare
+  is now computed per connected pane (reusing the `labels` the inner
+  glow/mottle pass already grouped panes by): each pane above a minimum
+  area gets its own small diagonal catch-light at a randomised (seeded per
+  pane) angle/position, confined to actual glass pixels — never the lead,
+  never the stone. Real leaded glass is dozens of individually-set facets;
+  one streak across the whole window read as a sticker on a flat sheet,
+  where per-pane highlights read as actual glasswork. New `reflection` /
+  `pane_gloss_strength` (default 0.24) params, `--no-reflection` /
+  `--pane-gloss-strength` on the CLI.
+- **Empath painted and processed** — the first new character since Monk/
+  Scarlet Woman. `id: 'empath'` was already present in
+  `trouble-brewing.ts`, so no script-data change was needed; just ran it
+  through the pipeline at `--strength strong` alongside a full re-run of
+  the other seven (border + reflection changes touch every pixel, so all
+  eight got regenerated together and reviewed as one labelled 4×2 grid on
+  the actual card background before pushing).
+- **`static/avatars/{washerwoman,librarian,poisoner,imp,chef,monk,
+  scarlet-woman,empath}.png`** all live. Also folded in a documentation
+  gap: the v5.1 light/reflection strengthening (below) had been coded and
+  pushed previously but never got a decisions.md entry — added
+  retroactively so the log matches what actually shipped.
+
+## 2026-09-10 — stained-glass v5.1: stronger light-through-glass effect
+
+- **`_depth_and_gloss()` extended** per feedback ("more glass like
+  reflection... light coming through"): a second, softer catch-light streak
+  on the opposite diagonal from the first (real photographed stained glass
+  rarely shows just one reflection band), plus a broad soft backlight glow
+  centred a little above the window's middle, screen-blended in — reads as
+  daylight genuinely coming through rather than just a glint off the
+  surface. Split into its own `light_strength` parameter (default bumped
+  from 0.16 to 0.28 after an A/B check at 0.16/0.28/0.40 — 0.40 started
+  washing out the linework in the upper panes) so it can be tuned
+  independently of the depth vignette. `--light-strength` on the CLI.
+- All seven avatars (pre-Empath) re-run at the new default and re-pushed.
+  Superseded a day later by v6 above, which replaced this whole-window
+  streak with per-pane reflections.
+
 ## 2026-09-09b — stained-glass v5: depth + gloss pass, re-rendered Monk/Scarlet Woman
 
 - **`_depth_and_gloss()` added to `stained_glass.py`.** A small, cheap pass
