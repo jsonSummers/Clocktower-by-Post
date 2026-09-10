@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Clocktower by Post
 
 An async companion app for **Blood on the Clock Tower**, built for playing across a
@@ -199,3 +200,7 @@ Push to a GitHub repo, import it at <https://vercel.com>, add the two
 `PUBLIC_SUPABASE_*` environment variables in the Vercel project settings. Every
 push then deploys. The app is a PWA, so on a phone it installs to the home
 screen from the browser's share menu.
+=======
+# Clocktower-by-Post
+Blood on the Clocktower app for semi-remote playing
+>>>>>>> 49f712b798afa25814c04b2b2e4d572facb5934d
