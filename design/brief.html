@@ -1,0 +1,669 @@
+<title>Clocktower by Post</title>
+<meta name="description" content="Design brief and build plan for an async Blood on the Clock Tower app for a wedding reception.">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #E7E3D8;
+    --surface: #F3F0E7;
+    --surface-2: #DDD8C9;
+    --text: #22252D;
+    --text-dim: #585B52;
+    --border: #C7C1AF;
+    --border-soft: #D5CFBE;
+    --accent: #8C5E17;
+    --accent-bright: #A9772A;
+    --on-accent: #F3F0E7;
+    --night: #3C4C66;
+    --death: #9E3327;
+    --shadow: 20px 20px 60px rgba(40, 36, 24, 0.10);
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #13151D;
+      --surface: #1B1E29;
+      --surface-2: #262A38;
+      --text: #E4E1D6;
+      --text-dim: #9A9DA8;
+      --border: #333849;
+      --border-soft: #282D3B;
+      --accent: #D3A258;
+      --accent-bright: #E4B871;
+      --on-accent: #13151D;
+      --night: #859DBD;
+      --death: #D4574A;
+      --shadow: 20px 20px 70px rgba(0, 0, 0, 0.45);
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #13151D;
+    --surface: #1B1E29;
+    --surface-2: #262A38;
+    --text: #E4E1D6;
+    --text-dim: #9A9DA8;
+    --border: #333849;
+    --border-soft: #282D3B;
+    --accent: #D3A258;
+    --accent-bright: #E4B871;
+    --on-accent: #13151D;
+    --night: #859DBD;
+    --death: #D4574A;
+    --shadow: 20px 20px 70px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: clamp(2rem, 5vw, 5rem) clamp(1.1rem, 5vw, 2.5rem) 6rem;
+  }
+
+  /* ---- Header ---- */
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
+    padding-bottom: 2.4rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 3rem;
+  }
+  .crest {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .dial { flex-shrink: 0; }
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+  h1 {
+    font-family: 'Spectral', Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(2.3rem, 7vw, 3.4rem);
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0.5rem 0 0;
+  }
+  .lede {
+    font-family: 'Spectral', Georgia, serif;
+    font-size: clamp(1.1rem, 2.6vw, 1.35rem);
+    font-style: italic;
+    color: var(--text-dim);
+    max-width: 48ch;
+    margin: 0;
+  }
+  .toggle {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.4rem 0.85rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .toggle:hover { color: var(--accent); border-color: var(--accent); }
+  .toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- Sections ---- */
+  section { margin-bottom: 3.4rem; }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.9rem;
+    margin-bottom: 1.3rem;
+  }
+  .sec-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--accent);
+    padding-top: 0.35rem;
+  }
+  h2 {
+    font-family: 'Spectral', Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(1.5rem, 4vw, 1.95rem);
+    line-height: 1.2;
+    letter-spacing: -0.005em;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h3 {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    letter-spacing: 0.01em;
+    margin: 2rem 0 0.6rem;
+  }
+  p { margin: 0 0 1rem; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  ul, ol { margin: 0 0 1rem; padding-left: 1.3rem; }
+  li { margin-bottom: 0.4rem; }
+  li::marker { color: var(--accent); }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 1.1rem 1.3rem;
+    margin: 1.4rem 0;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .eyebrow { margin-bottom: 0.5rem; }
+
+  /* ---- Tables ---- */
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.3rem 0;
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: top;
+  }
+  thead th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface) 45%, transparent); }
+  td code, .mono { font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; }
+
+  .pill {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .pill.tf { color: var(--night); }
+  .pill.out { color: var(--accent); }
+  .pill.min { color: var(--death); }
+  .pill.dem { color: var(--death); font-weight: 500; }
+
+  /* ---- Decision grid ---- */
+  .decisions {
+    display: grid;
+    gap: 1px;
+    background: var(--border-soft);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .decision {
+    background: var(--surface);
+    padding: 1rem 1.2rem;
+  }
+  .decision dt {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.3rem;
+  }
+  .decision dd { margin: 0; font-size: 0.95rem; }
+
+  /* ---- Roadmap ---- */
+  .roadmap { display: flex; flex-direction: column; gap: 0; }
+  .phase {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 1.2rem;
+    padding: 1.1rem 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .phase:last-child { border-bottom: 1px solid var(--border-soft); }
+  .phase-when {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.78rem;
+    color: var(--accent);
+    padding-top: 0.15rem;
+  }
+  .phase h3 { margin: 0 0 0.3rem; }
+  .phase p { margin: 0; font-size: 0.92rem; color: var(--text-dim); }
+
+  hr.tick {
+    border: none;
+    height: 1px;
+    background: var(--border);
+    margin: 3.5rem 0;
+    position: relative;
+  }
+  hr.tick::after {
+    content: "\25C6";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--bg);
+    color: var(--accent);
+    font-size: 0.7rem;
+    padding: 0 0.7rem;
+  }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.6rem;
+    border-top: 1px solid var(--border);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    header, section { animation: rise 0.5s ease both; }
+    section:nth-of-type(1) { animation-delay: 0.05s; }
+    section:nth-of-type(2) { animation-delay: 0.1s; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: none; }
+    }
+  }
+
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    .sec-head { gap: 0.6rem; }
+    .phase { grid-template-columns: 1fr; gap: 0.3rem; }
+  }
+</style>
+
+<div class="page">
+  <header>
+    <div class="crest">
+      <p class="eyebrow">Design brief &mdash; v1 &mdash; Sept 2026</p>
+      <svg class="dial" width="46" height="46" viewBox="0 0 46 46" aria-hidden="true">
+        <circle cx="23" cy="23" r="21" fill="none" stroke="var(--border)" stroke-width="1.5"/>
+        <path d="M23 2 A21 21 0 0 1 23 44 Z" fill="var(--night)" opacity="0.85"/>
+        <path d="M23 2 A21 21 0 0 0 23 44 Z" fill="var(--accent)" opacity="0.5"/>
+        <circle cx="23" cy="23" r="2.4" fill="var(--text)"/>
+        <line x1="23" y1="23" x2="23" y2="9" stroke="var(--text)" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="23" y1="23" x2="32" y2="27" stroke="var(--text)" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Clocktower by Post</h1>
+    </div>
+    <p class="lede">An async way to play Blood on the Clock Tower across a wedding reception &mdash; so people can plot, deduce, and still mingle.</p>
+    <div>
+      <button class="toggle" id="themeToggle" type="button">Switch to night</button>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>The idea</h2></div>
+    <p>You and your friends play Blood on the Clock Tower in person. At the reception you want to play <em>and</em> circulate at the same time. This app lets the game breathe across the day: people talk in person, the clock ticks for everyone at once, and the group only physically reconvenes for the big beats &mdash; a death, an execution, a nomination round.</p>
+    <p>The Storyteller runs everything from one screen: they pre-plan the night, release information when each phase turns, and field private requests to meet. Everyone else carries a phone that tells them whose neighbour they are, what they learned last night, and when to gather.</p>
+    <h3>Hard constraints</h3>
+    <ul>
+      <li><strong>No in-app messaging.</strong> Lying and reading people stays face-to-face. The app never becomes a chat client.</li>
+      <li><strong>One synced clock.</strong> Every phone agrees on the phase and the countdown, even on bad venue wifi.</li>
+      <li><strong>Trivial to join.</strong> Open a link, type your name. No install, no account, no app store.</li>
+      <li><strong>Storyteller does less, not more.</strong> Pre-planning up front so the day itself is mostly releasing what's already written.</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>Decisions locked in</h2></div>
+    <dl class="decisions">
+      <div class="decision">
+        <dt>Nominations &amp; votes</dt>
+        <dd>Done in person &mdash; the dramatic ritual stays real. The app records who was nominated, the vote counts, and the deaths. It also gives each player a private &ldquo;prime suspect&rdquo; tracker and notes.</dd>
+      </div>
+      <div class="decision">
+        <dt>The clock</dt>
+        <dd>Runs on a timer the Storyteller sets per phase. They can pause, extend, or skip at any point. Players just see the countdown.</dd>
+      </div>
+      <div class="decision">
+        <dt>Character art</dt>
+        <dd>Placeholders for now &mdash; ability text and neutral role icons. Revisit real token art near the end of the build.</dd>
+      </div>
+      <div class="decision">
+        <dt>Who builds it</dt>
+        <dd>You know Python and a little of other languages, new to app development. I choose the stack and lead the build; you test, play, and give feedback.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <hr class="tick">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>The stack</h2></div>
+    <p>The app is a <strong>Progressive Web App</strong>: a website that installs to the home screen and runs full-screen like a native app, from a single URL. Nothing to compile or distribute.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Layer</th><th>Choice</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Front end</td><td>SvelteKit</td><td>Small, readable components; the best PWA and offline story of the mainstream frameworks; gentle for someone coming from Python.</td></tr>
+          <tr><td>Backend &amp; data</td><td>Supabase</td><td>Hosted Postgres + realtime subscriptions + simple auth. No server for you to run or scale. Free tier covers a wedding many times over.</td></tr>
+          <tr><td>Realtime</td><td>Supabase Realtime</td><td>Phase changes, the meet queue, and the gather signal push to every phone over one websocket.</td></tr>
+          <tr><td>Hosting</td><td>Vercel or Netlify</td><td>Deploy on every git push. Free. The app is served from a CDN and cached on-device, so it loads even when the venue wifi is coughing.</td></tr>
+          <tr><td>Game logic</td><td>Plain TypeScript modules</td><td>Script definitions, night order, and the &ldquo;what does this role need&rdquo; rules are small pure functions &mdash; they read a lot like Python and are easy to unit-test.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <p class="eyebrow">Why not a Python server</p>
+      <p>You could write this with FastAPI or NiceGUI and stay in Python. The problem is the venue: a server-rendered app shows a blank screen the moment a phone drops connection, and you'd be running and babysitting that server on the day. Supabase + a cached PWA degrades gracefully instead &mdash; a 30-second dropout desyncs nobody. The bit of TypeScript you take on is worth that trade.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>The synced clock</h2></div>
+    <p>This is the part that has to be right. The server never streams a ticking number. It stores one fact:</p>
+    <div class="callout">
+      <p class="mono">phase = "night&nbsp;2" &nbsp;&middot;&nbsp; started_at = 19:42:10 &nbsp;&middot;&nbsp; duration = 12&nbsp;min &nbsp;&middot;&nbsp; paused = false</p>
+    </div>
+    <p>Each phone computes its own countdown from those values against its own clock. A brief disconnect changes nothing &mdash; the phone already knows when night 2 ends. When the Storyteller extends or pauses, that's a tiny write that every phone picks up on reconnect. Only the Storyteller's device needs a reliable connection, and even theirs can lag without breaking anyone else.</p>
+    <p>Clock drift between phones is handled with a one-time offset check against the server on join, so a phone whose clock is two minutes fast still shows the right countdown.</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>Architecture at a glance</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Piece</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Phase engine</td><td>Authoritative day / night state and timestamps. Storyteller drives transitions; timer auto-advances with override.</td></tr>
+          <tr><td>The circle</td><td>Seating order as an ordered list. Every player sees their live left and right living neighbours &mdash; needed for Empath, Chef, and others.</td></tr>
+          <tr><td>Night dispatch</td><td>Storyteller works down the night order. For each character: send pre-written info, or collect a choice, then release the result to that player only.</td></tr>
+          <tr><td>Prep board</td><td>Storyteller pre-writes info and advice per player per night, ahead of time. Releases on the night with one tap.</td></tr>
+          <tr><td>Meet queue</td><td>&ldquo;Request to meet the Storyteller&rdquo; button &rarr; an ordered queue on the Storyteller's screen, each with a short reason field.</td></tr>
+          <tr><td>Gather signal</td><td>Storyteller fires an alarm + vibration on every phone to reconvene. Optional reason (&ldquo;someone has died&rdquo;).</td></tr>
+          <tr><td>Player notebook</td><td>Private per-player notes and a &ldquo;prime suspect&rdquo; marker. Never shared, never synced to anyone else.</td></tr>
+          <tr><td>Death &amp; execution log</td><td>Records what happened each day so the Undertaker, Ravenkeeper, and the group history all read from one place.</td></tr>
+          <tr><td>Script engine</td><td>Every script is a data file &mdash; character list with team tags, night order, setup modifiers, player-count range. Script-agnostic from day one; Trouble Brewing is just the first file.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">06</span><h2>Data model sketch</h2></div>
+    <p>Roughly the tables Supabase will hold:</p>
+    <ul>
+      <li><span class="mono">scripts</span> &mdash; id, name, author, min / max players, the ordered character list with team tags, first-night and other-night order, and setup modifiers (Baron: +2 Outsiders, and so on).</li>
+      <li><span class="mono">games</span> &mdash; join code, script id, current phase, phase started_at / duration / paused, gather signal state, the team composition in use (computed from the script + count, Storyteller-overridable).</li>
+      <li><span class="mono">seats</span> &mdash; game id, seat index (the circle order), player name, assigned character, alive / dead, ghost vote used.</li>
+      <li><span class="mono">grimoire</span> &mdash; Storyteller-only: real character per seat, status tokens (poisoned, protected, red herring, drunk), reminder notes.</li>
+      <li><span class="mono">night_actions</span> &mdash; game id, night number, seat id, character, prompt shown, choice(s) made, result text, released_at.</li>
+      <li><span class="mono">prep_notes</span> &mdash; Storyteller drafts keyed by night + seat, with a released flag.</li>
+      <li><span class="mono">meet_requests</span> &mdash; seat id, reason, created_at, status (waiting / met / dismissed).</li>
+      <li><span class="mono">day_log</span> &mdash; nominations, vote tallies, executions, deaths &mdash; one row per event.</li>
+      <li><span class="mono">player_notes</span> &mdash; seat id, free text, prime-suspect seat id. Locked to that player by row-level security.</li>
+    </ul>
+    <p>Supabase row-level security is what keeps a player's phone from ever reading the grimoire or another player's notes &mdash; it's enforced at the database, not just hidden in the UI.</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">07</span><h2>The circle &amp; neighbours</h2></div>
+    <p>Players are seated in a fixed order at the start &mdash; the Storyteller arranges the circle by dragging names. Physically people wander off, but their <em>seat</em> stays put, so &ldquo;neighbour&rdquo; abilities still work.</p>
+    <p>Each player's screen shows the full circle with their own seat highlighted and their two living neighbours marked. When someone dies, the app recomputes living neighbours automatically &mdash; the Empath on night 3 sees the right two people without the Storyteller doing arithmetic. Dead players stay in the circle as ghosts so the geometry never shifts.</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">08</span><h2>Scripts &amp; player counts</h2></div>
+    <p>Characters are not fixed &mdash; a script is just a named list of characters plus a night order. The three official scripts are the common starting points, all built for <strong>5 to 15 players</strong>:</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Script</th><th>Players</th><th>Character of the game</th></tr></thead>
+        <tbody>
+          <tr><td>Trouble Brewing</td><td>5&ndash;15</td><td>The teaching script. Straightforward information, one Demon that kills each night. Start here.</td></tr>
+          <tr><td>Bad Moon Rising</td><td>5&ndash;15</td><td>Fast and deadly &mdash; several deaths a night, information is scarce and precious.</td></tr>
+          <tr><td>Sects &amp; Violets</td><td>5&ndash;15</td><td>Madness and misinformation. Abilities lie, the truth is slippery.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Team composition by player count</h3>
+    <p>All three official scripts share one table. The engine computes this from the count; the Storyteller can override it (some characters change it &mdash; Baron, Godfather, Fang Gu&hellip;).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Players</th><th>Townsfolk</th><th>Outsiders</th><th>Minions</th><th>Demon</th></tr></thead>
+        <tbody>
+          <tr><td>5</td><td>3</td><td>0</td><td>1</td><td>1</td></tr>
+          <tr><td>6</td><td>3</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>7</td><td>5</td><td>0</td><td>1</td><td>1</td></tr>
+          <tr><td>8</td><td>5</td><td>1</td><td>1</td><td>1</td></tr>
+          <tr><td>9</td><td>5</td><td>2</td><td>1</td><td>1</td></tr>
+          <tr><td>10</td><td>7</td><td>0</td><td>2</td><td>1</td></tr>
+          <tr><td>11</td><td>7</td><td>1</td><td>2</td><td>1</td></tr>
+          <tr><td>12</td><td>7</td><td>2</td><td>2</td><td>1</td></tr>
+          <tr><td>13</td><td>9</td><td>0</td><td>3</td><td>1</td></tr>
+          <tr><td>14</td><td>9</td><td>1</td><td>3</td><td>1</td></tr>
+          <tr><td>15</td><td>9</td><td>2</td><td>3</td><td>1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3>Above 15, and below 5</h3>
+    <ul>
+      <li><strong>Travellers</strong> extend any script past 15 &mdash; add up to 5 for a practical ceiling around <strong>20</strong>. Each Traveller is a public role, aligned good or evil by the Storyteller, and sits in the circle on top of the normal composition. A few groups run larger than 20, but 20 is the recommended max.</li>
+      <li><strong>Fabled</strong> are Storyteller-side helper characters (they fix balance problems or add house rules). They live in the grimoire, not the circle, and don't count toward the player total.</li>
+      <li><strong>Teensyville</strong> is the format for tiny groups: purpose-built <strong>5&ndash;7 player</strong> scripts with their own composition rules. Trouble Brewing technically runs at 5&ndash;6 but is flatter there; a dedicated teensy script plays better.</li>
+      <li><strong>Custom scripts</strong> from the community database each declare their own character list and supported range. The app treats them exactly like the official three &mdash; a data file with a min and max.</li>
+    </ul>
+    <p>For the wedding: pick the script once you know roughly how many guests will play. If it's a big, fluid crowd, Trouble Brewing plus Travellers is the safe choice; the app should let the Storyteller add and align Travellers live as people opt in or drop out.</p>
+  </section>
+
+  <hr class="tick">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">09</span><h2>Night dispatch &mdash; Trouble Brewing</h2></div>
+    <p>The reference the build works from. &ldquo;ST collects&rdquo; is what the Storyteller's screen prompts for; &ldquo;auto&rdquo; means the app can compute a suggested answer from the circle and grimoire, which the Storyteller confirms or overrides (for poison, drunk, Recluse, Spy, and their own discretion).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Character</th><th>Team</th><th>Wakes</th><th>Effect (paraphrased)</th><th>ST collects</th></tr></thead>
+        <tbody>
+          <tr><td>Washerwoman</td><td><span class="pill tf">Townsfolk</span></td><td>Night 1</td><td>One of two shown players is a specified Townsfolk.</td><td>Preplan: the pair + role</td></tr>
+          <tr><td>Librarian</td><td><span class="pill tf">Townsfolk</span></td><td>Night 1</td><td>One of two shown players is a specified Outsider (or none in play).</td><td>Preplan: the pair + role</td></tr>
+          <tr><td>Investigator</td><td><span class="pill tf">Townsfolk</span></td><td>Night 1</td><td>One of two shown players is a specified Minion.</td><td>Preplan: the pair + role</td></tr>
+          <tr><td>Chef</td><td><span class="pill tf">Townsfolk</span></td><td>Night 1</td><td>Number of pairs of evil players sitting next to each other.</td><td>Auto from circle</td></tr>
+          <tr><td>Empath</td><td><span class="pill tf">Townsfolk</span></td><td>Every night</td><td>How many of the two living neighbours are evil.</td><td>Auto from circle</td></tr>
+          <tr><td>Fortune Teller</td><td><span class="pill tf">Townsfolk</span></td><td>Every night</td><td>Picks two players; learns if either reads as the Demon. One good player is a permanent false positive.</td><td>Two seat picks; ST holds the red herring</td></tr>
+          <tr><td>Undertaker</td><td><span class="pill tf">Townsfolk</span></td><td>Night 2+</td><td>Learns which character was executed today.</td><td>Auto from day log</td></tr>
+          <tr><td>Monk</td><td><span class="pill tf">Townsfolk</span></td><td>Night 2+</td><td>Protects another player from the Demon tonight.</td><td>One seat pick</td></tr>
+          <tr><td>Ravenkeeper</td><td><span class="pill tf">Townsfolk</span></td><td>If killed at night</td><td>Picks a player; learns their character.</td><td>One seat pick, prompted on night death</td></tr>
+          <tr><td>Virgin</td><td><span class="pill tf">Townsfolk</span></td><td>&mdash;</td><td>First time nominated by a Townsfolk, that nominator is executed instead.</td><td>Day side; one-shot flag</td></tr>
+          <tr><td>Slayer</td><td><span class="pill tf">Townsfolk</span></td><td>&mdash;</td><td>Once per game, publicly names a player; if the Demon, they die.</td><td>Day side; one-shot flag</td></tr>
+          <tr><td>Soldier</td><td><span class="pill tf">Townsfolk</span></td><td>&mdash;</td><td>Safe from the Demon.</td><td>Nothing</td></tr>
+          <tr><td>Mayor</td><td><span class="pill tf">Townsfolk</span></td><td>&mdash;</td><td>If three live and no execution, good wins; a Demon kill may be redirected.</td><td>ST discretion</td></tr>
+          <tr><td>Butler</td><td><span class="pill out">Outsider</span></td><td>Every night</td><td>Picks a master; may only vote if the master is voting.</td><td>One seat pick</td></tr>
+          <tr><td>Drunk</td><td><span class="pill out">Outsider</span></td><td>&mdash;</td><td>Believes they are a Townsfolk; that ability does nothing.</td><td>ST maintains the false persona</td></tr>
+          <tr><td>Recluse</td><td><span class="pill out">Outsider</span></td><td>&mdash;</td><td>May register as evil / Minion / Demon.</td><td>ST discretion each time</td></tr>
+          <tr><td>Saint</td><td><span class="pill out">Outsider</span></td><td>&mdash;</td><td>If executed, good loses.</td><td>Day side</td></tr>
+          <tr><td>Poisoner</td><td><span class="pill min">Minion</span></td><td>Every night</td><td>Poisons a player until the following dusk; that ability malfunctions.</td><td>One seat pick</td></tr>
+          <tr><td>Spy</td><td><span class="pill min">Minion</span></td><td>Every night</td><td>Sees the grimoire; may register as good / Townsfolk.</td><td>Share grimoire view</td></tr>
+          <tr><td>Scarlet Woman</td><td><span class="pill min">Minion</span></td><td>&mdash;</td><td>Becomes the Demon if the Demon dies with five or more alive.</td><td>Auto trigger</td></tr>
+          <tr><td>Baron</td><td><span class="pill min">Minion</span></td><td>&mdash;</td><td>Adds two Outsiders to the game at setup.</td><td>Setup only</td></tr>
+          <tr><td>Imp</td><td><span class="pill dem">Demon</span></td><td>Night 2+</td><td>Kills a player; may pass the Demon on by killing itself.</td><td>One seat pick; ST resolves protection / poison</td></tr>
+          <tr><td>First night &mdash; evil</td><td><span class="pill dem">Demon</span> <span class="pill min">Minions</span></td><td>Night 1</td><td>Minions learn each other and the Demon. Demon learns the Minions and three not-in-play bluffs.</td><td>Preplan: the three bluffs</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <p class="eyebrow">On the character text</p>
+      <p>The wording above is paraphrased mechanics, not the official card text. Fan tools for private play have generally been tolerated by The Pandemonium Institute, but the published ability text and token art are theirs &mdash; fine for a private wedding, not for publishing or charging for the app.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">10</span><h2>Storyteller tools</h2></div>
+    <h3>Prep board</h3>
+    <p>Before the day, the Storyteller lays out each night: for every seat, a draft of what they'll learn and any nudge or advice. Drafts sit unreleased. When night falls, the Storyteller walks the night order and releases each one &mdash; or edits it first if the game has moved.</p>
+    <h3>Meet queue</h3>
+    <p>A player taps &ldquo;request to meet&rdquo; and adds a one-line reason. It joins an ordered list on the Storyteller's screen with a timestamp. The Storyteller marks each as met or dismissed; the player sees their place in line so they know whether to keep mingling or hover nearby.</p>
+    <h3>Gather signal</h3>
+    <p>One button on the Storyteller's screen rings and buzzes every phone at once, with an optional short reason. This is the &ldquo;stop mingling, come back to the courtyard&rdquo; call &mdash; for an execution, a dramatic death, or a whole-group story beat.</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">11</span><h2>Player tools</h2></div>
+    <ul>
+      <li><strong>Circle view</strong> &mdash; the seating ring, your seat, your two living neighbours, who's dead.</li>
+      <li><strong>Tonight / today</strong> &mdash; the current phase, the countdown, and whatever the Storyteller has released to you.</li>
+      <li><strong>Notebook</strong> &mdash; private free-text notes plus a prime-suspect marker you can point at a seat. Yours alone.</li>
+      <li><strong>History</strong> &mdash; the public record: who was nominated, vote counts, who died and when. No private information, same for everyone.</li>
+      <li><strong>Request to meet</strong> &mdash; the button and your position in the queue.</li>
+    </ul>
+  </section>
+
+  <hr class="tick">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">12</span><h2>Risks &amp; unknowns</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Risk</th><th>Plan</th></tr></thead>
+        <tbody>
+          <tr><td>Venue connectivity</td><td>The single biggest one. Cached PWA + the offset-clock pattern. Rehearse at the actual venue if possible. Consider a phone hotspot as Storyteller backup.</td></tr>
+          <tr><td>People drift too far / forget the game</td><td>The gather signal and a gentle phase-change buzz. Keep phases long enough to mingle, short enough to stay engaged &mdash; tune in playtests.</td></tr>
+          <tr><td>Storyteller overload on the day</td><td>The prep board is the mitigation. If the Storyteller is still typing during the night, the design has failed &mdash; test that.</td></tr>
+          <tr><td>Wedding-day chaos in general</td><td>The app must survive someone joining late, a dead battery, a player leaving for photos. Every screen needs a &ldquo;you're behind, here's the current state&rdquo; recovery.</td></tr>
+          <tr><td>IP</td><td>Private use only. No public deployment, no fees, no official art or text shipped in the repo.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">13</span><h2>Limits of this model</h2></div>
+    <p>Being straight about what this design and I can and can't do, so there are no surprises in month eight.</p>
+    <h3>This is scaffolding, not a rules engine</h3>
+    <p>Blood on the Clock Tower is deliberately adjudicated by a human. Registering as good or evil, how poison or drunkenness bends a result, jinxes between specific characters, &ldquo;the Storyteller decides&rdquo; &mdash; these resist automation. The app models <em>who wakes, in what order, and what to ask them</em>, and computes a suggested answer only where it's safe (Chef, Empath, Undertaker). Everything else the Storyteller confirms or overrides. A fully automatic resolver is not a goal, and I'd distrust one that claimed to be.</p>
+    <h3>Character data should come from a real source, not my memory</h3>
+    <p>Trouble Brewing I know cold. Across the ~200 official and experimental characters, my recall of every ability, team, setup modifier, jinx, and exact night-order position is good but not perfect. The build will seed character and night-order data from a machine-readable community source (the script-tool JSON format) and use my knowledge as a review pass &mdash; not the other way round. All ability wording stays paraphrased or Storyteller-entered; the official text and art never ship in the repo.</p>
+    <h3>The composition table is 5&ndash;15 only</h3>
+    <p>The standard table is solid for 5 to 15. Teensyville (5&ndash;7) and Travellers (past 15) follow looser, Storyteller-driven conventions, so the app computes a suggestion and always lets the Storyteller edit the final counts.</p>
+    <h3>Waking a locked phone is not reliable</h3>
+    <p>Web push to an installed PWA works, but a phone locked in a pocket for twenty minutes may not ring for the gather signal &mdash; iOS especially. Realistic expectation: it's dependable when the app is open or was used recently, and a catch-up prompt shows the moment someone looks. The social layer (people are loosely together at a wedding) carries the rest. This needs real-device testing early.</p>
+    <h3>The join link is the only credential</h3>
+    <p>Join-by-code-and-name means whoever holds a player's link can act as that player. Database row-level security stops cross-player peeking, but the link itself isn't a password. Among wedding guests that's a fair trade; it is not a hardened system.</p>
+    <h3>I can't tell you if it's fun</h3>
+    <p>Phase lengths, whether the meet queue works socially, whether async pacing keeps people engaged &mdash; only real games answer that, which is why there's a two-month playtest block. And I can't reproduce venue network conditions from here; a rehearsal on-site is the only real test of the clock.</p>
+    <h3>&ldquo;Most popular scripts&rdquo; is a snapshot</h3>
+    <p>The three official scripts and their player counts are stable facts. Community-script popularity shifts and I don't have live rankings &mdash; treat any &ldquo;popular custom script&rdquo; suggestion as a starting point to check against the current database, not a current chart.</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">14</span><h2>Build roadmap</h2></div>
+    <div class="roadmap">
+      <div class="phase">
+        <div class="phase-when">Sep&ndash;Oct</div>
+        <div>
+          <h3>Foundations</h3>
+          <p>Repo, Supabase project, deploy pipeline. Data model. Join flow, seating, the circle with live neighbours. The phase engine and synced clock &mdash; proven with three phones on bad wifi.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-when">Nov&ndash;Jan</div>
+        <div>
+          <h3>The night</h3>
+          <p>The script engine and character-data import. Night dispatch for all 22 Trouble Brewing characters as the first script. Storyteller night-order walkthrough. Player choice inputs. Auto-computed suggestions for Chef, Empath, Undertaker.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-when">Feb&ndash;Mar</div>
+        <div>
+          <h3>The day &amp; the Storyteller</h3>
+          <p>Prep board, meet queue, gather signal, day log, player notebook. First full solo run-through by the Storyteller.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-when">Apr&ndash;Jun</div>
+        <div>
+          <h3>Playtest</h3>
+          <p>Real games with friends over video. Fix the clock and reconnection edge cases. Tune phase lengths. Decide whether a second script is worth it.</p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-when">Jul&ndash;Aug</div>
+        <div>
+          <h3>Polish &amp; rehearse</h3>
+          <p>Real token art, sound design, the install prompt. A dress rehearsal at or near the venue. A written run-book for the Storyteller.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">15</span><h2>Next step</h2></div>
+    <p>Approved &mdash; the <strong>Foundations</strong> block is underway: the SvelteKit + Supabase skeleton, the schema, and a working synced clock you can open on two phones. That's the piece worth proving before anything else; everything else is built on it.</p>
+  </section>
+
+  <footer>
+    Clocktower by Post &middot; design brief &middot; not affiliated with The Pandemonium Institute
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeToggle');
+    function current() {
+      var attr = root.getAttribute('data-theme');
+      if (attr) return attr;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    function sync() {
+      btn.textContent = current() === 'dark' ? 'Switch to day' : 'Switch to night';
+    }
+    try {
+      var saved = localStorage.getItem('cbp-theme');
+      if (saved === 'dark' || saved === 'light') root.setAttribute('data-theme', saved);
+    } catch (e) {}
+    sync();
+    btn.addEventListener('click', function () {
+      var next = current() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      try { localStorage.setItem('cbp-theme', next); } catch (e) {}
+      sync();
+    });
+  })();
+</script>

@@ -1,0 +1,343 @@
+/*
+ * Theme: "Clocktower by Post" — a pale 15th-century scriptorium/monastery by
+ * day (limestone, red sandstone, gilt, vellum) with an optional dark
+ * "night vigil" variant (candlelit stone, the same palette pushed into
+ * shadow) toggled by hand, not by OS preference — see the button in
+ * +layout.svelte, which sets [data-theme] on <html> and remembers it.
+ *
+ * Real photographic textures are opt-in: every textured surface below
+ * layers an image from /textures/*.jpg *underneath* nothing — i.e. it's the
+ * top background-image — over a plain CSS gradient in the same tones. If a
+ * texture file isn't there yet, the browser just fails to paint that one
+ * layer and the gradient underneath carries the look on its own. Drop
+ * seamless/tileable images into static/textures/ (see static/textures/README.md
+ * for exact filenames + where to find free ones) whenever you have them —
+ * nothing here breaks in the meantime.
+ */
+
+:root {
+	/* ---- pale monastery-by-day (default) ---- */
+	--bg: #ece2cc;
+	--surface: #f8f1e0;
+	--surface-2: #e7d9ba;
+	--text: #2c2013;
+	--text-dim: #6b5c46;
+	--border: #cdb98e;
+	--accent: #97671c;
+	--accent-bright: #b98526;
+	--on-accent: #2a1a06;
+	--night: #3c4c66;
+	--danger: #9c2f27;
+	--ok: #3f7a51;
+
+	/* decorative-only tokens (not used for status/semantics) */
+	--redstone: #a34433;
+	--redstone-dim: #c98a78;
+	--lead: #4a3d29;
+	--gilt-glow: 245, 178, 90;
+	--stone-tex: url('/textures/limestone.jpg');
+	--parchment-tex: url('/textures/parchment.jpg');
+	--wood-tex: url('/textures/oak.jpg');
+	/* Reserved — not used anywhere yet. A warm red-sandstone grain, same
+	 * palette as --redstone/--redstone-dim, generated for whenever a
+	 * header band or a thicker top-rule wants real texture instead of a
+	 * flat colour. See static/textures/README.md. */
+	--redstone-tex: url('/textures/redstone.jpg');
+
+	color-scheme: light;
+
+	font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	background: var(--bg);
+	color: var(--text);
+}
+
+/* ---- night vigil (explicit toggle only — see the header candle button) ---- */
+:root[data-theme='night'] {
+	--bg: #14151c;
+	--surface: #1c1e28;
+	--surface-2: #262a38;
+	--text: #ece6d6;
+	--text-dim: #9a9da8;
+	--border: #3a3f52;
+	--accent: #d9a355;
+	--accent-bright: #ecb96a;
+	--on-accent: #171006;
+	--night: #8ea3c2;
+	--danger: #d4574a;
+	--ok: #6fae7f;
+
+	--redstone: #b5493a;
+	--redstone-dim: #7a3a30;
+	--lead: #1a1712;
+	--gilt-glow: 255, 189, 110;
+
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	min-height: 100%;
+}
+
+body {
+	color: var(--text);
+	-webkit-font-smoothing: antialiased;
+	line-height: 1.5;
+	background-color: var(--bg);
+	background-image:
+		var(--stone-tex),
+		radial-gradient(120% 90% at 50% -10%, color-mix(in srgb, var(--redstone) 8%, transparent), transparent 60%),
+		linear-gradient(180deg, color-mix(in srgb, var(--surface) 55%, var(--bg)), var(--bg) 40%);
+	background-repeat: repeat, no-repeat, no-repeat;
+	background-size:
+		420px auto,
+		100% 100%,
+		100% 100%;
+	background-attachment: fixed, fixed, fixed;
+	transition:
+		background-color 0.2s,
+		color 0.2s;
+}
+
+main {
+	max-width: 30rem;
+	margin: 0 auto;
+	/* Extra top clearance keeps page content (a right-aligned header button,
+	 * a title) from sitting under the fixed day/night toggle -- see
+	 * .theme-toggle below, which occupies roughly this same top-right
+	 * corner on every route. */
+	padding: 3.5rem 1.25rem 4rem;
+	padding-top: calc(3.5rem + env(safe-area-inset-top, 0px));
+	padding-left: calc(1.25rem + env(safe-area-inset-left, 0px));
+	padding-right: calc(1.25rem + env(safe-area-inset-right, 0px));
+}
+
+h1,
+h2,
+h3 {
+	font-family: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	text-wrap: balance;
+}
+
+h1 {
+	position: relative;
+	padding-bottom: 0.5rem;
+}
+h1::after {
+	content: '';
+	position: absolute;
+	left: 0;
+	bottom: 0;
+	width: 4.5rem;
+	height: 3px;
+	background: linear-gradient(90deg, var(--accent), transparent);
+	border-radius: 2px;
+}
+
+a {
+	color: var(--accent);
+}
+
+label {
+	display: block;
+	font-size: 0.8rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-dim);
+	margin-bottom: 0.35rem;
+}
+
+input,
+select {
+	width: 100%;
+	font: inherit;
+	color: var(--text);
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0.6rem 0.7rem;
+	/* Comfortable thumb target — this is a phone app first. */
+	min-height: 2.75rem;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+	outline: none;
+	box-shadow:
+		0 0 0 2px var(--bg),
+		0 0 0 4px rgba(var(--gilt-glow), 0.55),
+		0 0 14px 2px rgba(var(--gilt-glow), 0.35);
+}
+
+button {
+	font: inherit;
+	cursor: pointer;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--surface-2);
+	color: var(--text);
+	padding: 0.6rem 0.9rem;
+	/* Comfortable thumb target everywhere by default — this is a phone app
+	 * first. Text-link-style buttons (.clearlink and similar) opt back out. */
+	min-height: 2.75rem;
+	transition:
+		background 0.12s,
+		border-color 0.12s,
+		box-shadow 0.12s;
+}
+
+button:hover:not(:disabled) {
+	border-color: var(--accent);
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+button.primary {
+	background: linear-gradient(160deg, var(--accent-bright), var(--accent));
+	color: var(--on-accent);
+	border-color: var(--accent);
+	font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+	box-shadow: 0 0 16px 1px rgba(var(--gilt-glow), 0.45);
+}
+
+button.danger {
+	color: var(--danger);
+	border-color: var(--redstone-dim);
+}
+button.danger:hover:not(:disabled) {
+	border-color: var(--danger);
+	background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
+}
+
+/*
+ * .card — the recurring parchment panel. The texture is the vellum image;
+ * everything else (border, corner studs, top rule) is plain CSS so the
+ * panel still reads correctly before any texture file exists.
+ */
+.card {
+	position: relative;
+	background-color: var(--surface);
+	background-image: var(--parchment-tex), none;
+	background-repeat: repeat;
+	background-size: 380px auto;
+	border: 1px solid var(--border);
+	border-top: 3px solid var(--redstone);
+	border-radius: 10px;
+	padding: 1.1rem;
+	box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04) inset;
+}
+
+.stack {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+}
+
+.row {
+	display: flex;
+	gap: 0.6rem;
+	flex-wrap: wrap;
+}
+
+.muted {
+	color: var(--text-dim);
+	font-size: 0.9rem;
+}
+
+.error {
+	color: var(--danger);
+	font-size: 0.9rem;
+}
+
+/* A quiet horizontal break between sections — a gilt line with one small
+ * diamond stud at its centre. Two flat CSS shapes, deliberately simple. */
+.fleuron {
+	position: relative;
+	height: 1px;
+	margin: 0.4rem 0;
+	background: linear-gradient(90deg, transparent, var(--border) 20%, var(--border) 80%, transparent);
+}
+.fleuron::after {
+	content: '';
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 7px;
+	height: 7px;
+	background: var(--accent);
+	transform: translate(-50%, -50%) rotate(45deg);
+}
+
+/* Small theme-toggle candle button, used in +layout.svelte. */
+.theme-toggle {
+	position: fixed;
+	top: calc(0.75rem + env(safe-area-inset-top, 0px));
+	right: calc(0.75rem + env(safe-area-inset-right, 0px));
+	z-index: 30;
+	width: 2.75rem;
+	height: 2.75rem;
+	min-height: 2.75rem;
+	padding: 0;
+	border-radius: 999px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 1.15rem;
+	background: var(--surface);
+	backdrop-filter: blur(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	* {
+		transition: none !important;
+		animation: none !important;
+	}
+}
+
+/*
+ * Phone layout pass. The app was already single-column and narrow
+ * (main tops out at 30rem), so most of the work here is: give small
+ * screens a bit more breathing room back from the side padding, keep
+ * every tap target close to the ~44px comfortable minimum, and stop text
+ * scaling itself down below a readable size.
+ */
+@media (max-width: 420px) {
+	main {
+		padding-left: calc(1rem + env(safe-area-inset-left, 0px));
+		padding-right: calc(1rem + env(safe-area-inset-right, 0px));
+	}
+	.card {
+		padding: 0.9rem;
+	}
+	h1 {
+		font-size: 1.5rem;
+	}
+	button {
+		padding: 0.7rem 0.9rem;
+	}
+	input,
+	select {
+		padding: 0.65rem 0.7rem;
+	}
+}
+
+/* Never let the page itself scroll sideways -- a stray fixed-width child
+ * anywhere (a wide row of buttons, a long unbroken code) should scroll
+ * inside its own box, not push the viewport. */
+html {
+	overflow-x: hidden;
+}
