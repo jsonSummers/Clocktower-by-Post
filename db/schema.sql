@@ -504,3 +504,4 @@ alter publication supabase_realtime add table seat_roles;
 alter publication supabase_realtime add table night_actions;
 alter publication supabase_realtime add table meet_requests;
 alter publication supabase_realtime add table day_log;
+alter publication supabase_realtime add table grimoire;

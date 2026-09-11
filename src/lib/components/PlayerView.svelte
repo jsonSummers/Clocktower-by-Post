@@ -21,6 +21,8 @@
 	let confirmingLeave = $state(false);
 	let leaveTimer: ReturnType<typeof setTimeout> | null = null;
 	let selectedSeatIds = $state<string[]>([]);
+	let newNightInfo = $state(false);
+	let newNightInfoTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const script = $derived(session.game ? getScript(session.game.script_id) : undefined);
 	const roleChar = $derived(
@@ -92,6 +94,28 @@
 		const on = session.game?.gather ?? false;
 		if (on && !lastGather) buzz();
 		lastGather = on;
+	});
+
+	// Let a player know the Storyteller released (or updated) their night
+	// info without them having to keep checking the screen — skip the
+	// baseline captured on first load/mount so a reconnect doesn't re-buzz
+	// for information they've already seen.
+	let sawNightInfo = false;
+	let lastNightSig = '';
+	$effect(() => {
+		const sig = nightRow ? `${nightRow.id}:${nightRow.result ?? ''}:${nightRow.prompt ?? ''}` : '';
+		if (!sawNightInfo) {
+			sawNightInfo = true;
+			lastNightSig = sig;
+			return;
+		}
+		if (sig !== lastNightSig && sig !== '') {
+			buzz();
+			newNightInfo = true;
+			if (newNightInfoTimer) clearTimeout(newNightInfoTimer);
+			newNightInfoTimer = setTimeout(() => (newNightInfo = false), 5000);
+		}
+		lastNightSig = sig;
 	});
 
 	function buzz() {
@@ -184,8 +208,11 @@
 			</section>
 
 			{#if actsTonight}
-				<section class="card stack night-card">
-					<strong>Tonight</strong>
+				<section class="card stack night-card" class:pulsing={newNightInfo}>
+					<div class="row" style="justify-content:space-between;align-items:center">
+						<strong>Tonight</strong>
+						{#if newNightInfo}<span class="new-badge">New</span>{/if}
+					</div>
 					{#if roleChar?.prompt.kind === 'grimoire'}
 						<p class="muted" style="margin:0">
 							The Storyteller will show you the grimoire tonight — no action needed here.
@@ -272,6 +299,28 @@
 <style>
 	.night-card {
 		border-left: 3px solid var(--accent);
+		transition: box-shadow 0.4s ease;
+	}
+	.night-card.pulsing {
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+	}
+	.new-badge {
+		font-size: 0.7rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--bg);
+		background: var(--accent);
+		padding: 0.1rem 0.45rem;
+		border-radius: 999px;
+		animation: fade-in 0.2s ease;
+	}
+	@keyframes fade-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
 	}
 	.choice-grid {
 		display: flex;

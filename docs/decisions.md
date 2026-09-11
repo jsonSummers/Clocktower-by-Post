@@ -2,6 +2,115 @@
 
 Short records of choices that would otherwise be hard to reconstruct. Newest first.
 
+## 2026-09-11b — realtime self-healing, win-condition/voting helpers, gothic portrait grade
+
+Four fixes/features from the same round of live testing, in response to:
+"the player has to keep refreshing the page to get updates... perhaps we
+also need a notification", "I tried to just have a game with one seat, a
+demon, and no win screen came up", and portrait feedback ("moodier, gothic
+in colour", "black lines... still have some gaps... can become very gray
+due to the light reflection").
+
+- **Realtime refresh bug, root-caused and fixed pragmatically.** Extensive
+  live testing against the deployed site (fresh page loads, isolated replica
+  channels mimicking the app's exact subscription pattern, REST reads used
+  to independently confirm DB writes were succeeding while the UI stayed
+  stale) established that Supabase Realtime `postgres_changes` delivery to
+  this app's channel is genuinely unreliable in a way that doesn't map to
+  one fixable bug in our code — RLS and the publication list are correct,
+  writes succeed, but delivery back to the subscriber intermittently doesn't
+  happen, without ever firing `CHANNEL_ERROR`/`TIMED_OUT`. Rather than keep
+  chasing Supabase-internals blind, `GameSession` (`src/lib/game.svelte.ts`)
+  now treats realtime as a nice-to-have accelerant, not the source of truth:
+  a `.subscribe((status) => ...)` callback drives reconnect-with-backoff on
+  `CHANNEL_ERROR`/`TIMED_OUT`/`CLOSED`, AND — the actual guaranteed fix,
+  independent of channel health — a `setInterval(() => this.refreshAll(),
+  4000)` polls every table regardless of whether the channel claims to be
+  live. Each `refresh*()` now only applies new state (and bumps a new
+  `lastChangeAt` timestamp) when the fetched data's signature actually
+  differs from what's cached, so the 4s poll doesn't cause visible flicker
+  on every tick. `realtimeStatus` (`connecting`/`live`/`reconnecting`/
+  `polling`) is exposed for the UI.
+- **Lightweight in-app notification**, the user's suggested complement to
+  the above (native browser Notifications were deliberately skipped — not
+  worth the permission-flow complexity for this). `ClockFace.svelte` shows a
+  small live/reconnecting status dot next to the phase label and briefly
+  pulses the clock face + an "Updated" tag whenever `lastChangeAt` changes
+  (skipping the very first value, so page load doesn't pulse). `PlayerView.svelte`
+  goes further for the highest-value case — new night info arriving: it
+  reuses the existing `buzz()` (vibrate + soft tone, already used for the
+  gather signal) whenever the player's own `night_actions` row changes after
+  the initial page load, plus a "New" badge and a brief highlighted border on
+  the Tonight card.
+- **`grimoire` was missing from the `supabase_realtime` publication** in
+  `db/schema.sql` (found while auditing the publication list during the
+  above) — the Fortune Teller red-herring feature added last session could
+  fetch on load but would never get live updates. Added; requires
+  re-running `db/schema.sql`.
+- **Win condition and voting-rules helpers** (`src/lib/scripts/winCondition.ts`,
+  new, with `winCondition.test.ts`). Confirmed by grep that none of this
+  existed at all before — only `seat.alive` toggling, no win check, no vote
+  math, and `ghost_vote_available` was a schema column nothing ever read or
+  wrote. Scope was deliberately kept to computed helpers on the Storyteller's
+  screen rather than a full digital nomination/ballot UI, matching the app's
+  existing "doesn't replace in-person talk" design (nominations/votes/
+  executions already happen in person via the existing manual Alive/Dead
+  toggle). `checkWinCondition()` implements the two script-agnostic Trouble
+  Brewing conditions — good wins once no living seat holds a Demon-team
+  character (gated on roles actually being dealt, so an empty lobby doesn't
+  read as "good wins"), evil wins once only two seated players are left
+  alive — and is surfaced as a banner on the host page (visible on every
+  tab) with an "Announce & end game" button that sets `phase_kind='ended'`
+  (an existing, already-modelled but previously unused phase state) via the
+  existing `set_phase` RPC — no schema change needed for this part.
+  `voteState()` computes the official majority threshold (`floor(alive/2)+1`)
+  and lists dead seats with an unused ghost vote; both surface in a new
+  "Voting" card on the Seats tab. `setSeatAlive()` now resets
+  `ghost_vote_available` to true whenever a seat is marked dead (a fresh
+  ghost vote on death, per the rules), and a new `setGhostVoteAvailable()` +
+  per-seat toggle button let the Storyteller mark a ghost vote used. Script-
+  specific extra win conditions (e.g. "evil also wins if the Saint is
+  executed") are deliberately NOT automated — still a Storyteller call, same
+  as nominations/votes themselves.
+- **Portrait pipeline v7** (`scripts/stained_glass.py`), addressing both
+  portrait complaints together:
+  - *Moodier, gothic colour*: new `_gothic_grade()`, applied to pane fills
+    only (never the leading). Boosts saturation ~22% around each pixel's own
+    luminance for richer jewel tones, adds a gentle S-curve contrast so
+    shadows read as genuinely deep rather than flat/pastel, and works a
+    faint cool indigo tint into just the darkest areas (fading out above
+    ~35% luminance) — paired with the existing warm backlight glow, giving a
+    warm-light/cool-shadow split that reads as atmospheric rather than
+    flat-lit. New `mood_strength` param (default 1.0), `--mood-strength` CLI
+    flag.
+  - *Remaining gaps in the leading*: `find_leading()` previously relied
+    entirely on `find_and_fill_gaps()` recolouring pale/neutral pixels back
+    in, which only catches a gap if the missing pixels happen to read as
+    pale — an antialiased or slightly tinted break doesn't qualify, and
+    these were exactly the gaps still visible after the earlier v2 fix. v7
+    adds `ndimage.binary_closing` directly on the boolean leading mask
+    (`close_gap_iterations`, default 2) — a purely geometric fix that
+    bridges small breaks regardless of the gap pixels' colour, without
+    thickening or merging lines that are genuinely meant to stay separate
+    (closing is idempotent on shapes already larger than the structuring
+    element). Confirmed visually: the imp's horn/chain linework, which
+    showed obvious dashed/broken segments under v6, is solid under v7.
+  - *Lines turning grey under the reflection*: root cause found in
+    `_finish_glass()` — the backlight glow and reflection streak blends were
+    applied to the WHOLE window uniformly, including already-drawn leading
+    pixels, so wherever a streak crossed the ink it lightened straight
+    toward white/gold. Fixed by passing the `is_line` mask through and
+    discounting (via `line_light_guard`, default 0.88 = ~12% of normal
+    strength survives) both blends on leading pixels — the came's own
+    dedicated ridge-highlight (a separate, deliberately thin catch-light
+    already drawn earlier) still shows through, but the broad per-window
+    glow no longer washes the ink out.
+  - All 9 live avatars in `static/avatars/` regenerated with v7
+    (`strength="strong"`, same defaults) and pushed to the device — same
+    sync-gap risk as last time (script changes living only in the tool's
+    scratch space until explicitly committed to disk) was checked for and
+    avoided this time by committing the script itself before regenerating.
+
 ## 2026-09-11 — robust auto-deal, Night 1 evil-team recognition, Fortune Teller red herring
 
 - **Auto-deal rewritten as a shared, correct module** (`src/lib/scripts/deal.ts`,

@@ -7,12 +7,14 @@
 	import { nextPhase, phaseLabel } from '$lib/clock';
 	import { getScript } from '$lib/scripts';
 	import { dealGame } from '$lib/scripts/deal';
+	import { checkWinCondition, voteState } from '$lib/scripts/winCondition';
 	import {
 		phase as phaseRpc,
 		applyDeal,
 		assignRole,
 		setSeatName,
 		setSeatAlive,
+		setGhostVoteAvailable,
 		resolveMeet,
 		moveSeat,
 		kickSeat
@@ -47,6 +49,23 @@
 	);
 	const waiting = $derived(session.meetRequests.filter((r) => r.status === 'waiting'));
 	const openSeats = $derived(session.seats.filter((s) => !s.user_id).length);
+
+	const winState = $derived(checkWinCondition(session.seats, session.roles, script));
+	const votes = $derived(voteState(session.seats));
+	// Only surface the win check once the game is actually being played — not
+	// during lobby setup (before roles/seats have settled) or after the
+	// Storyteller has already ended it.
+	const showWinBanner = $derived(
+		winState.winner !== null &&
+			session.game?.phase_kind !== 'lobby' &&
+			session.game?.phase_kind !== 'ended'
+	);
+
+	function endGame() {
+		return run(
+			phaseRpc.set(supabase, gameId, 'ended', session.phase?.cycle ?? 1, 0)
+		);
+	}
 
 	const TEAM_ORDER: Team[] = ['townsfolk', 'outsider', 'minion', 'demon', 'traveller', 'fabled'];
 	const byTeam = $derived(
@@ -145,6 +164,21 @@
 			</p>
 		</header>
 
+		{#if showWinBanner}
+			<section class="card win-banner {winState.winner}">
+				<strong>{winState.winner === 'good' ? 'Good wins' : 'Evil wins'}</strong>
+				<p style="margin:0.2rem 0 0">{winState.reason}</p>
+				{#if winState.winner === 'evil' && winState.aliveDemons.length}
+					<p class="muted" style="margin:0.2rem 0 0">
+						Still alive: {winState.aliveDemons.map((d) => d.seatName).join(', ')}
+					</p>
+				{/if}
+				<button class="primary" style="margin-top:0.5rem" onclick={endGame}>
+					Announce &amp; end game
+				</button>
+			</section>
+		{/if}
+
 		<nav class="tabs">
 			<button class:active={tab === 'clock'} onclick={() => (tab = 'clock')}>Clock</button>
 			<button class:active={tab === 'seats'} onclick={() => (tab = 'seats')}>Seats</button>
@@ -199,6 +233,18 @@
 				</p>
 				{#if dealMsg}<p class="muted" style="margin:0">{dealMsg}</p>{/if}
 			</section>
+			<section class="card stack">
+				<strong>Voting</strong>
+				<p class="muted" style="margin:0">
+					{votes.aliveCount} alive · needs <strong>{votes.votesToExecute}</strong> votes to execute
+					{#if votes.ghostVoteSeats.length}
+						· {votes.ghostVoteSeats.length} ghost
+						{votes.ghostVoteSeats.length === 1 ? 'vote' : 'votes'} still available ({votes.ghostVoteSeats
+							.map((g) => g.seatName)
+							.join(', ')})
+					{/if}
+				</p>
+			</section>
 			<section class="stack">
 				{#each session.seats as seat, i (seat.id)}
 					<div class="card seatrow" class:open={!seat.user_id}>
@@ -217,6 +263,16 @@
 								{seat.alive ? 'Alive' : 'Dead'}
 							</button>
 						</div>
+						{#if !seat.alive}
+							<button
+								class="ghostvote"
+								onclick={() =>
+									run(setGhostVoteAvailable(supabase, seat.id, !seat.ghost_vote_available))}
+								title="Toggle whether this seat's ghost vote has been used"
+							>
+								Ghost vote: {seat.ghost_vote_available ? 'available' : 'used'}
+							</button>
+						{/if}
 						<select
 							value={session.roleFor(seat.id) ?? ''}
 							onchange={(e) =>
@@ -332,5 +388,25 @@
 	}
 	.seatrow input {
 		flex: 1;
+	}
+	.win-banner {
+		text-align: center;
+		border-width: 2px;
+	}
+	.win-banner.good {
+		border-color: var(--night);
+		color: var(--night);
+	}
+	.win-banner.evil {
+		border-color: var(--danger);
+		color: var(--danger);
+	}
+	.win-banner p {
+		color: var(--text);
+	}
+	.ghostvote {
+		align-self: flex-start;
+		font-size: 0.78rem;
+		padding: 0.2rem 0.5rem;
 	}
 </style>

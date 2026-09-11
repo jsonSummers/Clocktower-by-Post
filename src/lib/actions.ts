@@ -13,8 +13,18 @@ export function setSeatName(c: SupabaseClient, seatId: string, name: string) {
 	return c.from('seats').update({ name }).eq('id', seatId);
 }
 
+/** Marking a seat dead grants a fresh, unused ghost vote (the official rule);
+ * reviving a seat leaves ghost_vote_available alone since it doesn't apply
+ * while alive. */
 export function setSeatAlive(c: SupabaseClient, seatId: string, alive: boolean) {
-	return c.from('seats').update({ alive }).eq('id', seatId);
+	const patch: { alive: boolean; ghost_vote_available?: boolean } = { alive };
+	if (!alive) patch.ghost_vote_available = true;
+	return c.from('seats').update(patch).eq('id', seatId);
+}
+
+/** Storyteller toggles whether a dead seat still has their one-time ghost vote. */
+export function setGhostVoteAvailable(c: SupabaseClient, seatId: string, available: boolean) {
+	return c.from('seats').update({ ghost_vote_available: available }).eq('id', seatId);
 }
 
 export function assignRole(

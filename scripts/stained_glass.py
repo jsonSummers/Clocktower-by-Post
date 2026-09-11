@@ -88,6 +88,20 @@ that's what real dozens-of-individually-set-facets leaded glass actually
 does. New `reflection`/`pane_gloss_strength` params, `--no-reflection` /
 `--pane-gloss-strength` on the CLI.
 
+v7 responds to live-game feedback on the actual deployed avatars: (1) a
+gothic colour-grade pass (`_gothic_grade`, `mood_strength`) -- richer
+saturation, a touch more contrast, and a faint cool indigo tint worked into
+just the darkest pane areas, paired with the existing warm backlight so the
+light itself stays warm while the shadows go moodier; (2) `find_leading` now
+closes small breaks in the line network itself (`close_gap_iterations`, a
+`binary_closing` on the boolean mask) rather than relying only on
+colour-based gap recolouring -- catches a wider range of real gaps since it
+doesn't care what colour the missing pixels happen to be; (3) `_finish_glass`
+now takes the `is_line` mask and heavily discounts (not zeroes -- the came's
+own dedicated ridge highlight still shows) the backlight/reflection blend on
+leading pixels, fixing a real bug where a reflection streak crossing the
+ink washed a properly black line out to visibly grey.
+
 Usage:
     python3 stained_glass.py IN.png OUT.png [--strength subtle|medium|strong]
 
@@ -182,7 +196,8 @@ def _smooth_noise(h, w, scale, seed):
     return (field / 127.5) - 1.0  # back to -1..1
 
 
-def find_leading(rgb, line_gray_max=80, line_chroma_max=26, line_max_halfwidth=5.0):
+def find_leading(rgb, line_gray_max=80, line_chroma_max=26, line_max_halfwidth=5.0,
+                  close_iterations=2):
     """True leading: dark AND desaturated AND thin.
 
     Dark+desaturated alone isn't enough — a broad, flat, near-black or
@@ -201,12 +216,30 @@ def find_leading(rgb, line_gray_max=80, line_chroma_max=26, line_max_halfwidth=5
     moment that component touched one thick junction blob or one broad dark
     fill. Pointwise, each thin segment still reads as thin no matter what
     it's connected to.
+
+    v7 closes small breaks in the line NETWORK ITSELF (`close_iterations`,
+    via `ndimage.binary_closing`) rather than relying only on
+    `find_and_fill_gaps` recolouring pale pixels back in afterwards. That
+    color-based gap fill only catches a break if the missing pixels happen
+    to read as pale/neutral — an antialiased or slightly tinted break (the
+    kind still visible as "gaps" in the black lines after the v2 fix)
+    doesn't qualify, but geometric closing doesn't care what colour the gap
+    pixels are: it just bridges two nearby true regions of this mask. A
+    closing is dilate-then-erode, which is idempotent on shapes already
+    larger than the structuring element, so it only fills small gaps/
+    concavities (here, up to ~2*close_iterations px) without thickening or
+    merging lines that are genuinely meant to stay separate.
     """
     gray = rgb.mean(axis=2)
     chroma = rgb.max(axis=2) - rgb.min(axis=2)
     candidate = (gray < line_gray_max) & (chroma < line_chroma_max)
     dist = ndimage.distance_transform_edt(candidate)
-    return candidate & (dist <= line_max_halfwidth)
+    is_line = candidate & (dist <= line_max_halfwidth)
+    if close_iterations > 0:
+        is_line = ndimage.binary_closing(
+            is_line, structure=np.ones((3, 3)), iterations=close_iterations
+        )
+    return is_line
 
 
 def find_and_fill_gaps(rgb, is_line, gray_min=110, chroma_max=28, max_halfwidth=3.0):
@@ -308,9 +341,42 @@ def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.050, n_courses=34):
     return is_border, np.clip(stone, 0, 255)
 
 
+def _gothic_grade(rgb, sat_boost=0.22, contrast=0.10, shadow_tint_strength=0.12):
+    """v7: 'moodier, gothic in colour', applied to the pane fills only (the
+    leading gets its own dedicated near-black came colour, untouched here).
+
+    Three small, additive moves rather than one big filter, so nothing
+    clips or looks obviously processed:
+      - a saturation boost around each pixel's own luminance, so the jewel
+        tones (the whole point of stained glass) read richer instead of
+        pastel;
+      - a gentle S-curve contrast around mid-grey, so shadows read as
+        genuinely dark/deep rather than flat -- moodier, less washed;
+      - a faint cool indigo tint worked into ONLY the darkest areas (a
+        `shadow_amt` term that fades to 0 above roughly 35% luminance), the
+        classic warm-light/cool-shadow split that reads as atmospheric
+        rather than uniformly lit -- paired with the existing warm backlight
+        glow, which is left alone so the light source itself stays warm.
+    """
+    luma = (rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114)[..., None]
+    rgb = luma + (rgb - luma) * (1 + sat_boost)
+
+    x = np.clip(rgb / 255.0, 0, 1)
+    x = x + contrast * (x - 0.5) * (1 - np.abs(x - 0.5) * 2) * 2
+    rgb = np.clip(x, 0, 1) * 255.0
+
+    luma2 = (rgb[..., 0] * 0.299 + rgb[..., 1] * 0.587 + rgb[..., 2] * 0.114) / 255.0
+    shadow_amt = (np.clip((0.35 - luma2) / 0.35, 0, 1) ** 1.4)[..., None] * shadow_tint_strength
+    indigo = np.array([72.0, 58.0, 112.0], dtype=np.float32)
+    rgb = rgb * (1 - shadow_amt) + indigo[None, None, :] * shadow_amt
+
+    return np.clip(rgb, 0, 255)
+
+
 def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
                    depth_strength=0.10, light_strength=0.28,
-                   reflect_strength=0.12, backlight_warmth=0.35):
+                   reflect_strength=0.12, backlight_warmth=0.35,
+                   is_line=None, line_light_guard=0.88):
     """Applied last, over the whole finished window. Three ingredients:
 
       - a gentle DEPTH vignette over the whole window (glass, stone, lead
@@ -339,6 +405,20 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
     inpaints the ones it can detect, but a strong global effect can still
     make a missed hairline gap read as a light leak, which is one more
     reason these stay gentle rather than cranked up.
+
+    v7 fixes a real bug reported from the live app: wherever the backlight
+    glow or a reflection streak crossed the black leading, it lightened the
+    came right along with the glass -- on the worst-placed lines this washed
+    a properly black line out to a visibly grey one ("the lines... can
+    become very gray due to the light reflection"). The came already has its
+    own deliberate, narrow pewter ridge-highlight (drawn earlier, in
+    `stained_glass()`) to catch light -- it doesn't also need the broad
+    per-window glow pushing it toward white/gold. `is_line` lets this
+    function heavily discount (not fully zero, so the ridge highlight can
+    still peek through) both the backlight and reflection blends wherever
+    the pixel is leading, via `line_light_guard` (0..1, how much to cut the
+    effect there -- default 0.88 means leading gets ~12% of the normal
+    lightening).
     """
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     nx, ny = xx / w, yy / h  # 0..1 across the canvas
@@ -371,26 +451,32 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
 
     out = rgb * shade[..., None]
     backlight_amt = np.clip(backlight * light_strength, 0, 0.85)
-    out = out + (backlight_color[None, None, :] - out) * backlight_amt[..., None]
     reflect_amt = np.clip(gloss * reflect_strength, 0, 0.85)
+    if is_line is not None:
+        guard = 1.0 - (is_line.astype(np.float32) * line_light_guard)
+        backlight_amt = backlight_amt * guard
+        reflect_amt = reflect_amt * guard
+    out = out + (backlight_color[None, None, :] - out) * backlight_amt[..., None]
     out = out + (255.0 - out) * reflect_amt[..., None]
     return np.clip(out, 0, 255)
 
 
 def stained_glass(img: Image.Image, strength: str = "medium",
                    line_gray_max: int = 80, line_chroma_max: int = 26,
-                   line_max_halfwidth: float = 5.0,
+                   line_max_halfwidth: float = 5.0, close_gap_iterations: int = 2,
                    fill_gaps: bool = True, seed: int = 0,
                    border: bool = True, border_seed: int = None,
                    depth: bool = True, depth_strength: float = 0.10,
                    light_strength: float = 0.28, backlight_warmth: float = 0.35,
                    reflection: bool = True, reflect_strength: float = 0.12,
+                   mood_strength: float = 1.0,
                    return_debug: bool = False):
     p = PRESETS[strength]
     rgb = np.array(img.convert("RGB")).astype(np.float32)
     h, w, _ = rgb.shape
 
-    is_line = find_leading(rgb, line_gray_max, line_chroma_max, line_max_halfwidth)
+    is_line = find_leading(rgb, line_gray_max, line_chroma_max, line_max_halfwidth,
+                            close_iterations=close_gap_iterations)
 
     gap_mask = np.zeros(is_line.shape, dtype=bool)
     if fill_gaps:
@@ -427,6 +513,16 @@ def stained_glass(img: Image.Image, strength: str = "medium",
     screen = 1 - (1 - a) * (1 - np.clip(b, 0, 1))
     panes = np.clip(a * (1 - p["bloom"]) + screen * p["bloom"], 0, 1) * 255.0
 
+    # --- moodier, more gothic colour: richer saturation + deeper shadows +
+    #     a faint cool tint worked into just the darkest areas ---
+    if mood_strength > 0:
+        panes = _gothic_grade(
+            panes,
+            sat_boost=0.22 * mood_strength,
+            contrast=0.10 * mood_strength,
+            shadow_tint_strength=0.12 * mood_strength,
+        )
+
     # --- re-draw the leading: mostly true near-black, with a NARROW neutral
     #     pewter catch-light only right at the came's own ridge, not smeared
     #     across its whole width ---
@@ -461,6 +557,7 @@ def stained_glass(img: Image.Image, strength: str = "medium",
             light_strength=light_strength if depth else 0.0,
             backlight_warmth=backlight_warmth,
             reflect_strength=reflect_strength if reflection else 0.0,
+            is_line=is_line,
         )
 
     out = np.clip(out, 0, 255).astype(np.uint8)
@@ -484,6 +581,11 @@ def main():
     ap.add_argument("--backlight-warmth", type=float, default=0.35)
     ap.add_argument("--no-reflection", action="store_true")
     ap.add_argument("--reflect-strength", type=float, default=0.12)
+    ap.add_argument("--close-gap-iterations", type=int, default=2,
+                     help="bridges small breaks in the leading network itself; 0 disables")
+    ap.add_argument("--mood-strength", type=float, default=1.0,
+                     help="0 = off, 1 = full gothic colour grade (richer saturation, deeper "
+                          "shadows, cool shadow tint); can go above 1 for more")
     args = ap.parse_args()
     src = Image.open(args.infile)
     out = stained_glass(src, strength=args.strength, fill_gaps=not args.no_gap_fill,
@@ -491,7 +593,9 @@ def main():
                          light_strength=args.light_strength,
                          backlight_warmth=args.backlight_warmth,
                          reflection=not args.no_reflection,
-                         reflect_strength=args.reflect_strength)
+                         reflect_strength=args.reflect_strength,
+                         close_gap_iterations=args.close_gap_iterations,
+                         mood_strength=args.mood_strength)
     out.save(args.outfile)
     print(f"saved {args.outfile} ({out.size[0]}x{out.size[1]}, strength={args.strength})")
 
