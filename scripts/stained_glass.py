@@ -310,7 +310,7 @@ def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.050, n_courses=34):
 
 def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
                    depth_strength=0.10, light_strength=0.28,
-                   pane_gloss_strength=0.24):
+                   reflect_strength=0.12, backlight_warmth=0.35):
     """Applied last, over the whole finished window. Three ingredients:
 
       - a gentle DEPTH vignette over the whole window (glass, stone, lead
@@ -318,19 +318,27 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
         reads as the window sitting a little recessed.
       - a broad, soft BACKLIGHT glow, also over the whole window -- as if
         daylight is genuinely coming through from behind, not just glinting
-        off the surface.
-      - a PER-PANE reflection: each individual enclosed glass pane (the
-        same `labels` the inner glow/mottle earlier used) gets its own
-        small diagonal catch-light at a randomised angle/position/width,
-        confined to `glass_mask` (excludes the lead lines and the stone
-        border). Real leaded glass is dozens of individually-set, slightly
-        tilted facets; one reflection streak across the whole window always
-        read as a sticker on a flat sheet, where per-pane highlights read
-        as actual glasswork -- per feedback ("identify glass regions...
-        apply the reflection per glass panel").
+        off the surface. `backlight_warmth` tints this glow away from flat
+        white toward an antique-glass gold (0 = white, 1 = fully warm) --
+        the "sunlight actually coming through stained glass" experiment,
+        since real backlit glass reads warm, not like a flat torch.
+      - a REFLECTION: back to one soft, restrained pair of diagonal
+        catch-light streaks across the WHOLE window (v6 tried this per
+        individual glass pane instead; reverted per feedback -- "I'm not
+        sure i like the per panel illumination... revert back to the
+        subtle pan-avatar reflection, only subtle"). `reflect_strength`
+        defaults noticeably lower than the old v5.1 `light_strength`
+        default (0.28) that this was conflated with -- the streak itself
+        should be a much quieter accent than the backlight glow now doing
+        the "more glass" work.
 
     These avatars render small (a seat-circle thumbnail, a role-card
-    portrait), so all three stay deliberately restrained by default.
+    portrait), so all three stay deliberately restrained by default. Also
+    worth knowing: the source paintings' black leading/fill don't always
+    have fully closed borders (small gaps here and there) -- `fill_gaps`
+    inpaints the ones it can detect, but a strong global effect can still
+    make a missed hairline gap read as a light leak, which is one more
+    reason these stay gentle rather than cranked up.
     """
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     nx, ny = xx / w, yy / h  # 0..1 across the canvas
@@ -345,31 +353,27 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
     bx, by = 0.5, 0.4
     backlight = np.exp(-(((nx - bx) * 1.05) ** 2 + ((ny - by) * 1.2) ** 2) / (2 * 0.30 ** 2))
 
-    pane_gloss = np.zeros((h, w), dtype=np.float32)
-    if pane_gloss_strength > 0 and n > 0:
-        objects = ndimage.find_objects(labels)
-        min_area = max(40, int(0.00006 * w * h))  # skip tiny slivers/specks
-        for idx, sl in enumerate(objects, start=1):
-            if sl is None:
-                continue
-            pane = (labels[sl] == idx) & glass_mask[sl]
-            if pane.sum() < min_area:
-                continue
-            rng = np.random.default_rng(seed * 7919 + idx)
-            ph, pw = pane.shape
-            pyy, pxx = np.mgrid[0:ph, 0:pw].astype(np.float32)
-            lnx, lny = pxx / max(pw, 1), pyy / max(ph, 1)
-            angle = np.deg2rad(rng.uniform(18, 55))
-            phase = rng.uniform(0.20, 0.55)
-            band = rng.uniform(0.20, 0.34)
-            d = lnx * np.cos(angle) + lny * np.sin(angle) - phase
-            local_gloss = np.exp(-(d ** 2) / (2 * band ** 2))
-            local_gloss = np.where(pane, local_gloss, 0.0)
-            pane_gloss[sl] = np.maximum(pane_gloss[sl], local_gloss)
+    # One restrained pair of whole-window diagonal catch-lights (not
+    # per-pane): a primary streak from the upper-left, and a second,
+    # softer one from the lower-right so it doesn't read as a single flat
+    # stripe -- both fading out before they reach the opposite edge.
+    d1 = (nx - ny * 0.5) - 0.12
+    gloss1 = np.exp(-(d1 ** 2) / (2 * 0.10 ** 2))
+    gloss1 *= np.clip(1.2 - ny * 1.3, 0, 1)
+    d2 = (nx + ny * 0.4) - 1.0
+    gloss2 = np.exp(-(d2 ** 2) / (2 * 0.13 ** 2))
+    gloss2 *= np.clip(ny * 1.5 - 0.1, 0, 1)
+    gloss = np.clip(gloss1 + 0.55 * gloss2, 0, 1)
+
+    warm_gold = np.array([255.0, 238.0, 196.0], dtype=np.float32)
+    white = np.array([255.0, 255.0, 255.0], dtype=np.float32)
+    backlight_color = white * (1 - backlight_warmth) + warm_gold * backlight_warmth
 
     out = rgb * shade[..., None]
-    screen_amt = np.clip(backlight * light_strength + pane_gloss * pane_gloss_strength, 0, 0.85)
-    out = out + (255.0 - out) * screen_amt[..., None]
+    backlight_amt = np.clip(backlight * light_strength, 0, 0.85)
+    out = out + (backlight_color[None, None, :] - out) * backlight_amt[..., None]
+    reflect_amt = np.clip(gloss * reflect_strength, 0, 0.85)
+    out = out + (255.0 - out) * reflect_amt[..., None]
     return np.clip(out, 0, 255)
 
 
@@ -379,8 +383,8 @@ def stained_glass(img: Image.Image, strength: str = "medium",
                    fill_gaps: bool = True, seed: int = 0,
                    border: bool = True, border_seed: int = None,
                    depth: bool = True, depth_strength: float = 0.10,
-                   light_strength: float = 0.28,
-                   reflection: bool = True, pane_gloss_strength: float = 0.24,
+                   light_strength: float = 0.28, backlight_warmth: float = 0.35,
+                   reflection: bool = True, reflect_strength: float = 0.12,
                    return_debug: bool = False):
     p = PRESETS[strength]
     rgb = np.array(img.convert("RGB")).astype(np.float32)
@@ -455,7 +459,8 @@ def stained_glass(img: Image.Image, strength: str = "medium",
             out, w, h, labels, n, glass_mask, seed=seed,
             depth_strength=depth_strength if depth else 0.0,
             light_strength=light_strength if depth else 0.0,
-            pane_gloss_strength=pane_gloss_strength if reflection else 0.0,
+            backlight_warmth=backlight_warmth,
+            reflect_strength=reflect_strength if reflection else 0.0,
         )
 
     out = np.clip(out, 0, 255).astype(np.uint8)
@@ -476,15 +481,17 @@ def main():
     ap.add_argument("--no-border", action="store_true")
     ap.add_argument("--no-depth", action="store_true")
     ap.add_argument("--light-strength", type=float, default=0.28)
+    ap.add_argument("--backlight-warmth", type=float, default=0.35)
     ap.add_argument("--no-reflection", action="store_true")
-    ap.add_argument("--pane-gloss-strength", type=float, default=0.24)
+    ap.add_argument("--reflect-strength", type=float, default=0.12)
     args = ap.parse_args()
     src = Image.open(args.infile)
     out = stained_glass(src, strength=args.strength, fill_gaps=not args.no_gap_fill,
                          border=not args.no_border, depth=not args.no_depth,
                          light_strength=args.light_strength,
+                         backlight_warmth=args.backlight_warmth,
                          reflection=not args.no_reflection,
-                         pane_gloss_strength=args.pane_gloss_strength)
+                         reflect_strength=args.reflect_strength)
     out.save(args.outfile)
     print(f"saved {args.outfile} ({out.size[0]}x{out.size[1]}, strength={args.strength})")
 

@@ -22,11 +22,19 @@
 	 * as reference only.
 	 */
 	import type { GameSession } from '$lib/game.svelte';
-	import { getScript } from '$lib/scripts';
-	import { wakeOrder, infoCandidatesFor, type InfoCandidate } from '$lib/nightInfo';
+	import { getScript, getCharacter } from '$lib/scripts';
+	import type { Character } from '$lib/types';
+	import {
+		wakeOrder,
+		infoCandidatesFor,
+		night1EvilReveals,
+		parseChoiceResult,
+		type InfoCandidate
+	} from '$lib/nightInfo';
 	import {
 		sendNightInfo,
 		askNightChoice,
+		sendChoiceReading,
 		reopenNightChoice,
 		clearNightAction
 	} from '$lib/actions';
@@ -59,6 +67,39 @@
 			: []
 	);
 
+	/** Night 1 only: characterId -> the ready-worded evil-team-recognition text
+	 * (Demon learns Minions + bluffs; Minions learn the Demon and each other). */
+	const evilRevealMap = $derived.by(() => {
+		if (!script || night !== 1) return new Map<string, string>();
+		const ctx = {
+			script,
+			seats: session.seats,
+			roleOf: (id: string) => session.roleFor(id),
+			night: 1,
+			askingSeatId: '',
+			variant: 0
+		};
+		return new Map(night1EvilReveals(ctx).map((s) => [s.character.id, s.text]));
+	});
+	function evilRevealText(characterId: string): string | null {
+		return evilRevealMap.get(characterId) ?? null;
+	}
+	/** True when the Night 1 reveal IS the whole message for this character
+	 * (Imp/demon — no kill tonight; Spy/grimoire; Scarlet Woman & Baron/none) —
+	 * as opposed to a role that also has its own action that night (Poisoner),
+	 * where the reveal is folded into that ask instead, since night_actions
+	 * allows only one row per seat per night. */
+	function isRevealOnly(character: Character): boolean {
+		if (character.team === 'demon') return character.prompt.kind === 'choose';
+		if (character.team === 'minion') return character.prompt.kind === 'grimoire' || character.prompt.kind === 'none';
+		return false;
+	}
+	function isDemonSeat(seatId: string): boolean {
+		const cid = session.roleFor(seatId);
+		const c = script && cid ? getCharacter(script, cid) : undefined;
+		return c?.team === 'demon';
+	}
+
 	function actionFor(seatId: string) {
 		// Preview mode never reflects real dispatch state — it's a reference
 		// view of what *would* be asked/sent, not a record of what was.
@@ -78,6 +119,20 @@
 		if (!script || night == null) return [];
 		const character = script.characters.find((c) => c.id === characterId);
 		if (!character) return [];
+		if (night === 1) {
+			const reveal = evilRevealText(characterId);
+			if (reveal && isRevealOnly(character)) {
+				return [
+					{
+						label: 'Night 1 reveal',
+						text: reveal,
+						rationale:
+							'Automatic evil-team recognition — the Demon learns its Minions (+ bluffs); Minions learn the Demon and each other.',
+						truthful: true
+					}
+				];
+			}
+		}
 		const ctx = {
 			script,
 			seats: session.seats,
@@ -138,6 +193,8 @@
 		{#each steps as step (step.character.id)}
 			{@const action = actionFor(step.seat.id)}
 			{@const kind = step.character.prompt.kind}
+			{@const reveal = night === 1 ? evilRevealText(step.character.id) : null}
+			{@const revealOnly = reveal != null && isRevealOnly(step.character)}
 			<div class="card stack step">
 				<div class="row" style="align-items:center;justify-content:space-between;flex-wrap:nowrap">
 					<div class="row" style="align-items:center;flex-wrap:nowrap;gap:0.5rem">
@@ -150,7 +207,7 @@
 					<span class="status" class:done={action?.released_at}>
 						{#if !live}
 							preview
-						{:else if kind === 'choose' && action?.result}
+						{:else if kind === 'choose' && !revealOnly && action?.result}
 							answered
 						{:else if action?.released_at}
 							sent
@@ -160,14 +217,17 @@
 					</span>
 				</div>
 
-				{#if kind === 'grimoire'}
+				{#if kind === 'grimoire' && !revealOnly}
 					<p class="muted" style="margin:0">Sees the full grimoire — nothing to send here.</p>
-				{:else if kind === 'choose'}
+				{:else if kind === 'choose' && !revealOnly}
 					{#if step.character.prompt.kind === 'choose'}
 						{@const alive = session.seats.filter((s) => s.alive)}
 						{@const pool = step.character.prompt.canPickSelf
 							? alive
 							: alive.filter((s) => s.id !== step.seat.id)}
+						{#if reveal}
+							<p class="revealbox">{reveal}</p>
+						{/if}
 						{#if !live}
 							<p style="margin:0">{step.character.summary}</p>
 							<p class="muted" style="margin:0">
@@ -176,17 +236,52 @@
 								{step.character.prompt.canPickSelf ? '(may pick themselves)' : '(not themselves)'}.
 							</p>
 						{:else if action?.result}
-							{@const chosen = (() => {
-								try {
-									const v = JSON.parse(action.result ?? 'null');
-									return Array.isArray(v) ? (v as string[]) : [];
-								} catch {
-									return [];
-								}
-							})()}
+							{@const parsed = parseChoiceResult(action.result)}
 							<p style="margin:0">
-								Chose: <strong>{chosen.map(seatName).join(' and ') || '—'}</strong>
+								Chose: <strong>{(parsed?.picks ?? []).map(seatName).join(' and ') || '—'}</strong>
 							</p>
+							{#if step.character.id === 'fortune-teller' && parsed}
+								{#if parsed.reading}
+									<p style="margin:0">
+										Reading sent: <strong>{parsed.reading === 'yes' ? 'Yes — reads as the Demon' : 'No'}</strong>
+									</p>
+								{:else}
+									{@const yesReading = parsed.picks.some(
+										(id) => isDemonSeat(id) || id === session.redHerringSeatId
+									)}
+									<button
+										class="primary"
+										onclick={() =>
+											run(
+												sendChoiceReading(
+													session.client,
+													action.id,
+													parsed.picks,
+													yesReading ? 'yes' : 'no'
+												)
+											)}
+									>
+										Send reading: {yesReading ? 'Yes' : 'No'}
+									</button>
+								{/if}
+							{:else if step.character.id === 'ravenkeeper' && parsed}
+								{#if parsed.reading}
+									<p style="margin:0">Reveal sent: <strong>{parsed.reading}</strong></p>
+								{:else}
+									{@const targetId = parsed.picks[0]}
+									{@const targetCharId = targetId ? session.roleFor(targetId) : null}
+									{@const targetName =
+										(script && targetCharId ? getCharacter(script, targetCharId)?.name : null) ??
+										'no character assigned'}
+									<button
+										class="primary"
+										onclick={() =>
+											run(sendChoiceReading(session.client, action.id, parsed.picks, targetName))}
+									>
+										Send reveal: {targetName}
+									</button>
+								{/if}
+							{/if}
 							<div class="row">
 								<button onclick={() => run(reopenNightChoice(session.client, action.id))}>
 									Let them choose again
@@ -202,7 +297,7 @@
 									ask(
 										step.seat.id,
 										step.character.id,
-										step.character.summary,
+										reveal ? `${reveal}\n\n${step.character.summary}` : step.character.summary,
 										pool.map((s) => s.id)
 									)}
 							>
@@ -345,6 +440,14 @@
 		border: 1px dashed var(--border);
 		border-radius: 8px;
 		padding: 0.6rem 0.8rem;
+	}
+	.revealbox {
+		margin: 0;
+		font-size: 0.85rem;
+		background: var(--surface-2);
+		border: 1px solid var(--ok);
+		border-radius: 8px;
+		padding: 0.55rem 0.7rem;
 	}
 	.preview-cand {
 		display: flex;

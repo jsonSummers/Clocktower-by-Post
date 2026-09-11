@@ -6,8 +6,10 @@
 	import { GameSession } from '$lib/game.svelte';
 	import { nextPhase, phaseLabel } from '$lib/clock';
 	import { getScript } from '$lib/scripts';
+	import { dealGame } from '$lib/scripts/deal';
 	import {
 		phase as phaseRpc,
+		applyDeal,
 		assignRole,
 		setSeatName,
 		setSeatAlive,
@@ -31,6 +33,8 @@
 	let actionError = $state<string | null>(null);
 	let codeCopied = $state(false);
 	let confirmingKick = $state<string | null>(null);
+	let dealing = $state(false);
+	let dealMsg = $state<string | null>(null);
 
 	onMount(() => {
 		ensureSignedIn().then(() => session.start(gameId));
@@ -85,6 +89,23 @@
 		} catch {
 			/* clipboard blocked — the code is right there on screen to read out */
 		}
+	}
+
+	async function dealRoles() {
+		if (!script) return;
+		dealing = true;
+		dealMsg = null;
+		const result = dealGame(script, session.seats);
+		const { error } = await applyDeal(supabase, gameId, result);
+		if (error) {
+			dealMsg = 'Deal failed: ' + (error instanceof Error ? error.message : String(error));
+		} else {
+			const { comp, redHerringSeatId } = result;
+			dealMsg =
+				`Dealt ${result.assignments.size} roles — ${comp.townsfolk} Townsfolk / ${comp.outsider} Outsider / ${comp.minion} Minion / ${comp.demon} Demon` +
+				(redHerringSeatId ? ' · Fortune Teller red herring set.' : '.');
+		}
+		dealing = false;
 	}
 
 	function clickKick(seatId: string) {
@@ -163,6 +184,20 @@
 		{:else if tab === 'seats'}
 			<section class="card">
 				<Circle seats={session.seats} labelFor={(s) => roleName(s.id)} />
+			</section>
+			<section class="card stack">
+				<div class="row" style="justify-content:space-between;align-items:center">
+					<strong>Deal roles</strong>
+					<button class="primary" onclick={dealRoles} disabled={dealing}>
+						{dealing ? 'Dealing…' : 'Deal random roles'}
+					</button>
+				</div>
+				<p class="muted" style="margin:0">
+					Randomly assigns every seated character for {session.seats.length} players, applies
+					Baron's setup swing when it's drawn, and sets the Fortune Teller's red herring.
+					Re-dealing replaces the current assignment and clears tonight's dispatch.
+				</p>
+				{#if dealMsg}<p class="muted" style="margin:0">{dealMsg}</p>{/if}
 			</section>
 			<section class="stack">
 				{#each session.seats as seat, i (seat.id)}

@@ -87,7 +87,8 @@ create table grimoire (
 	game_id                uuid not null references games(id) on delete cascade,
 	real_character_id      text,
 	tokens                 jsonb not null default '[]'::jsonb,
-	notes                  text not null default ''
+	notes                  text not null default '',
+	is_red_herring         boolean not null default false
 );
 
 create table night_actions (

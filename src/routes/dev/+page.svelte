@@ -9,15 +9,16 @@
 	} from '$lib/supabase';
 	import { GameSession } from '$lib/game.svelte';
 	import { SCRIPTS, getScript, getCharacter } from '$lib/scripts';
-	import { baseComposition } from '$lib/scripts/composition';
+	import { dealGame } from '$lib/scripts/deal';
 	import { nextPhase, phaseLabel } from '$lib/clock';
-	import { phase as phaseRpc, assignRole, setSeatAlive, resolveMeet } from '$lib/actions';
+	import { phase as phaseRpc, applyDeal, setSeatAlive, resolveMeet } from '$lib/actions';
 	import type { SupabaseClient } from '@supabase/supabase-js';
-	import type { GameRow, Team } from '$lib/types';
+	import type { GameRow } from '$lib/types';
 	import Circle from '$lib/components/Circle.svelte';
 	import ClockFace from '$lib/components/ClockFace.svelte';
 	import PlayerView from '$lib/components/PlayerView.svelte';
 	import NightDispatch from '$lib/components/NightDispatch.svelte';
+	import Avatar from '$lib/components/Avatar.svelte';
 
 	let scriptId = $state(SCRIPTS[0].id);
 	let seatCount = $state(7);
@@ -121,23 +122,17 @@
 
 	async function dealRoles() {
 		if (!st || !gameId || !script) return;
-		const comp = baseComposition(seatCount);
-		const take = (team: Team, n: number) =>
-			script!.characters.filter((c) => c.team === team).slice(0, n).map((c) => c.id);
-		const pool = [
-			...take('townsfolk', comp.townsfolk),
-			...take('outsider', comp.outsider),
-			...take('minion', comp.minion),
-			...take('demon', comp.demon)
-		];
-		for (let i = pool.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[pool[i], pool[j]] = [pool[j], pool[i]];
+		const result = dealGame(script, st.seats);
+		const { error } = await applyDeal(supabase, gameId, result);
+		if (error) {
+			note('deal failed: ' + (error instanceof Error ? error.message : String(error)));
+			return;
 		}
-		for (let i = 0; i < st.seats.length; i++) {
-			await assignRole(supabase, gameId, st.seats[i].id, pool[i] ?? null);
-		}
-		note(`Dealt ${pool.length} roles (${comp.townsfolk}/${comp.outsider}/${comp.minion}/${comp.demon})`);
+		const { comp, redHerringSeatId } = result;
+		note(
+			`Dealt ${result.assignments.size} roles (${comp.townsfolk}/${comp.outsider}/${comp.minion}/${comp.demon})` +
+				(redHerringSeatId ? ' · red herring set' : '')
+		);
 	}
 
 	async function advance() {

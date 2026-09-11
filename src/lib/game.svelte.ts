@@ -4,7 +4,7 @@ import { syncServerTime, currentOffset } from './server-time';
 import { phaseFromGame } from './phase';
 import { livingNeighbours } from './circle';
 import { readClock, formatClock, phaseLabel, type ClockView, type PhaseState } from './clock';
-import type { GameRow, SeatRow, SeatRoleRow, MeetRequestRow, NightActionRow } from './types';
+import type { GameRow, SeatRow, SeatRoleRow, MeetRequestRow, NightActionRow, GrimoireRow } from './types';
 
 /**
  * Live view of one game for a single client (a real device, or one simulated
@@ -23,6 +23,8 @@ export class GameSession {
 	meetRequests = $state<MeetRequestRow[]>([]);
 	/** Every row for the Storyteller; only this seat's released rows for a player. */
 	nightActions = $state<NightActionRow[]>([]);
+	/** Storyteller-only per RLS — a player's client always sees an empty array here. */
+	grimoire = $state<GrimoireRow[]>([]);
 	error = $state<string | null>(null);
 	now = $state(Date.now());
 	userId = $state<string | null>(null);
@@ -64,6 +66,11 @@ export class GameSession {
 					(a) => a.seat_id === this.mySeat!.id && a.night === this.phase!.cycle
 				) ?? null)
 			: null
+	);
+	/** The Fortune Teller's red herring seat, for the Storyteller's session only
+	 * (grimoire is empty for a player's client, so this is null for them too). */
+	readonly redHerringSeatId = $derived<string | null>(
+		this.grimoire.find((g) => g.is_red_herring)?.seat_id ?? null
 	);
 
 	roleFor(seatId: string): string | null {
@@ -116,6 +123,11 @@ export class GameSession {
 				{ event: '*', schema: 'public', table: 'night_actions', filter: `game_id=eq.${gameId}` },
 				() => this.refreshNightActions()
 			)
+			.on(
+				'postgres_changes',
+				{ event: '*', schema: 'public', table: 'grimoire', filter: `game_id=eq.${gameId}` },
+				() => this.refreshGrimoire()
+			)
 			.subscribe();
 
 		this.#timer = setInterval(() => (this.now = Date.now()), 250);
@@ -126,7 +138,8 @@ export class GameSession {
 			this.refreshSeats(),
 			this.refreshRoles(),
 			this.refreshMeet(),
-			this.refreshNightActions()
+			this.refreshNightActions(),
+			this.refreshGrimoire()
 		]);
 	}
 
@@ -159,6 +172,12 @@ export class GameSession {
 	async refreshNightActions() {
 		const { data } = await this.#client.from('night_actions').select('*').eq('game_id', this.#gameId);
 		this.nightActions = (data ?? []) as NightActionRow[];
+	}
+
+	/** Empty (not an error) for a player's client — grimoire is storyteller-only per RLS. */
+	async refreshGrimoire() {
+		const { data } = await this.#client.from('grimoire').select('*').eq('game_id', this.#gameId);
+		this.grimoire = (data ?? []) as GrimoireRow[];
 	}
 
 	stop() {

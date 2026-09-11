@@ -71,6 +71,16 @@
 	--lead: #1a1712;
 	--gilt-glow: 255, 189, 110;
 
+	/* The day textures above were being silently reused here too -- at
+	 * normal opacity the near-black night gradient on `body` just painted
+	 * over the pale limestone photo, so night mode had no visible stone
+	 * grain at all, just a flat dark wash ("night mode only changes the
+	 * text boxes"). These are genuinely dark-toned images (see
+	 * scripts/make_textures.py's *_night() variants), not the day ones
+	 * re-tinted by CSS. */
+	--stone-tex: url('/textures/limestone-night.jpg');
+	--parchment-tex: url('/textures/parchment-night.jpg');
+
 	color-scheme: dark;
 }
 

@@ -71,7 +71,8 @@ export const troubleBrewing: Script = {
 				'Each night: picks two players and learns whether either reads as the Demon. One good player is a permanent false positive (the red herring).',
 			firstNight: 41,
 			otherNight: 51,
-			prompt: { kind: 'choose', count: 2, canPickSelf: true }
+			prompt: { kind: 'choose', count: 2, canPickSelf: true },
+			redHerring: true
 		},
 		{
 			id: 'undertaker',

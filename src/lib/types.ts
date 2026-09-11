@@ -24,6 +24,8 @@ export interface Character {
 	setup?: SetupModifier;
 	/** True for day-only or passive abilities the Storyteller tracks by hand. */
 	daySide?: boolean;
+	/** Gets a red herring assigned at deal time (Fortune Teller). */
+	redHerring?: boolean;
 }
 
 export type NightPrompt =
@@ -100,6 +102,7 @@ export interface GrimoireRow {
 	real_character_id: string | null;
 	tokens: unknown;
 	notes: string;
+	is_red_herring: boolean;
 }
 
 export interface NightActionRow {

@@ -93,6 +93,16 @@ function pickOne<T>(arr: T[], rng: () => number): T | undefined {
 	return arr[Math.floor(rng() * arr.length)];
 }
 
+/** Fisher-Yates using a supplied seeded rng, so results are reproducible per (night, seat, variant). */
+function shuffledBy<T>(arr: T[], rng: () => number): T[] {
+	const a = [...arr];
+	for (let i = a.length - 1; i > 0; i--) {
+		const j = Math.floor(rng() * (i + 1));
+		[a[i], a[j]] = [a[j], a[i]];
+	}
+	return a;
+}
+
 // ---------------------------------------------------------------------------
 // info candidates
 
@@ -281,6 +291,79 @@ export function infoCandidatesFor(
 }
 
 // ---------------------------------------------------------------------------
+// Night 1 evil-team recognition
+
+export interface EvilRevealStep {
+	seat: SeatRow;
+	character: Character;
+	/** Ready-worded reveal text for this seat — what the Demon or Minion
+	 * learns about the rest of the evil team on Night 1. */
+	text: string;
+}
+
+/**
+ * Night 1 only: every seated Demon and Minion, with what they learn about
+ * each other. Independent of wakeOrder()/nightOrder() because some evil
+ * characters (Scarlet Woman, Baron in Trouble Brewing) are otherwise fully
+ * passive and never get a night step at all — but per the real rules the
+ * whole evil team still wakes briefly on the first night to see each other.
+ *
+ * The Demon learns its Minions plus three not-in-play "bluff" characters
+ * (so it has something to claim if asked what it is). Each Minion learns
+ * the Demon and its fellow Minions.
+ */
+export function night1EvilReveals(ctx: NightContext): EvilRevealStep[] {
+	if (ctx.night !== 1) return [];
+	const dealt: { seat: SeatRow; character: Character }[] = [];
+	for (const seat of ctx.seats) {
+		const cid = ctx.roleOf(seat.id);
+		const character = cid ? ctx.script.characters.find((c) => c.id === cid) : undefined;
+		if (character) dealt.push({ seat, character });
+	}
+	const demonEntry = dealt.find((d) => d.character.team === 'demon');
+	const minionEntries = dealt.filter((d) => d.character.team === 'minion');
+	const steps: EvilRevealStep[] = [];
+
+	if (demonEntry) {
+		const others = minionEntries.map((m) => `${seatLabel(m.seat)} (the ${m.character.name})`);
+		const inPlayIds = new Set(dealt.map((d) => d.character.id));
+		const rng = seeded(`${ctx.night}:bluffs:${demonEntry.seat.id}:${ctx.variant ?? 0}`);
+		const notInPlay = shuffledBy(
+			ctx.script.characters.filter((c) => !inPlayIds.has(c.id) && c.id !== demonEntry.character.id),
+			rng
+		);
+		const bluffs = notInPlay.slice(0, 3);
+		const minionsText = others.length ? others.join(', ') : 'none — you are the only evil player';
+		const bluffsText = bluffs.length
+			? bluffs.map((c) => c.name).join(', ')
+			: '(script has too few unused characters left for bluffs)';
+		steps.push({
+			seat: demonEntry.seat,
+			character: demonEntry.character,
+			text: `You are the ${demonEntry.character.name}. Your Minions: ${minionsText}. Not-in-play bluffs, in case anyone asks what you are: ${bluffsText}. You do not kill tonight.`
+		});
+	}
+
+	for (const m of minionEntries) {
+		const fellow = minionEntries
+			.filter((x) => x.seat.id !== m.seat.id)
+			.map((x) => `${seatLabel(x.seat)} (the ${x.character.name})`);
+		const demonText = demonEntry
+			? `${seatLabel(demonEntry.seat)} (the ${demonEntry.character.name})`
+			: 'not yet assigned';
+		steps.push({
+			seat: m.seat,
+			character: m.character,
+			text: `You are Evil. The Demon is ${demonText}.${
+				fellow.length ? ` Your fellow Minions: ${fellow.join(', ')}.` : ' You are the only Minion.'
+			}`
+		});
+	}
+
+	return steps;
+}
+
+// ---------------------------------------------------------------------------
 // choose-type prompts (the player picks, not the Storyteller)
 
 export interface ChoicePrompt {
@@ -301,6 +384,32 @@ export function choicePromptFor(ctx: NightContext, character: Character): Choice
 		canPickSelf: character.prompt.canPickSelf,
 		validSeatIds: pool.map((s) => s.id)
 	};
+}
+
+/** A submitted choose-type `result` is either the plain picks array a player
+ * writes via submitNightChoice, or — once the Storyteller has computed and
+ * sent a reveal on top of it (Fortune Teller's yes/no, Ravenkeeper's
+ * revealed character) — an object carrying both. Reusing the one `result`
+ * field this way avoids a schema change, since night_actions only allows one
+ * row per (game, night, seat). */
+export interface ParsedChoiceResult {
+	picks: string[];
+	reading?: string;
+}
+
+export function parseChoiceResult(raw: string | null): ParsedChoiceResult | null {
+	if (!raw) return null;
+	try {
+		const v = JSON.parse(raw);
+		if (Array.isArray(v)) return { picks: v as string[] };
+		if (v && typeof v === 'object' && Array.isArray((v as { picks?: unknown }).picks)) {
+			const obj = v as { picks: string[]; reading?: string };
+			return { picks: obj.picks, reading: obj.reading };
+		}
+	} catch {
+		/* not JSON — treat as no valid answer yet */
+	}
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,9 +434,31 @@ export function wakeOrder(
 		if (cid && !bySeat.has(cid)) bySeat.set(cid, s);
 	}
 	const steps: WakeStep[] = [];
+	const included = new Set<string>();
+
+	if (night === 1) {
+		// The evil team recognises each other first, even characters that are
+		// otherwise fully passive and never get a firstNight entry at all
+		// (Scarlet Woman, Baron) — see night1EvilReveals().
+		const evilFirst = script.characters
+			.filter((c) => (c.team === 'demon' || c.team === 'minion') && bySeat.has(c.id))
+			.sort((a, b) => (a.team === 'demon' ? 0 : 1) - (b.team === 'demon' ? 0 : 1));
+		for (const character of evilFirst) {
+			const seat = bySeat.get(character.id);
+			if (seat && !included.has(character.id)) {
+				steps.push({ seat, character });
+				included.add(character.id);
+			}
+		}
+	}
+
 	for (const character of order) {
+		if (included.has(character.id)) continue;
 		const seat = bySeat.get(character.id);
-		if (seat) steps.push({ seat, character });
+		if (seat) {
+			steps.push({ seat, character });
+			included.add(character.id);
+		}
 	}
 	return steps;
 }

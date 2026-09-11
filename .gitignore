@@ -36,3 +36,8 @@ vite.config.ts.timestamp-*
 # supabase local
 supabase/.branches/
 supabase/.temp/
+
+# python (portrait tooling)
+__pycache__/
+*.pyc
+design/portraits-review.png

@@ -30,6 +30,22 @@ LEAD = (74, 61, 41)           # --lead
 REDSTONE = (163, 68, 51)      # --redstone
 REDSTONE_DIM = (201, 138, 120)  # --redstone-dim
 
+# ---- app.css palette (:root[data-theme='night']) -- candlelit stone in
+# shadow, not just the day palette darkened. Used by the *_night() variants
+# below so the night-vigil theme gets its own dark-toned texture image
+# instead of silently reusing the pale day one (which is what happened
+# before: the near-black night gradient in app.css just painted over the
+# pale photo, so night mode had no visible stone grain at all).
+NIGHT_BG = (20, 21, 28)             # --bg (night)
+NIGHT_SURFACE = (40, 44, 60)        # lifted above --surface (28,30,40) -- the
+                                     # literal token was too close to NIGHT_BG
+                                     # to read as textured stone at all once
+                                     # blended, even before the app's own
+                                     # gradient goes on top of it
+NIGHT_SURFACE2 = (52, 57, 78)       # lifted above --surface-2 for the same reason
+NIGHT_BORDER = (72, 79, 104)        # lifted above --border for the same reason
+NIGHT_ACCENT = (217, 163, 85)       # --accent (night) -- candlelight gold, used sparingly
+
 
 def tileable_noise(size, cells, octaves=4, seed=0, persistence=0.55):
     """Value noise in 0..1, seamless when tiled at `size`."""
@@ -136,6 +152,41 @@ def limestone(size=768, seed=1):
     save("limestone.jpg", base)
 
 
+def limestone_night(size=768, seed=101):
+    """Dark 'candlelit stone in shadow' variant of limestone(), for the
+    night-vigil theme. Same coursed-masonry construction, keyed to the dark
+    palette instead of the day one -- night vigil used to silently reuse
+    limestone.jpg (the pale day image), so at typical opacity the near-black
+    night-theme gradient in app.css just hid the photo instead of showing a
+    genuinely dark stone grain. Joints get a faint warm highlight rather than
+    a plain darken -- dark-on-dark mortar lines would just vanish, where a
+    little candlelight-gold catching the edge reads as lit stone."""
+    n = tileable_noise(size, 6, octaves=5, seed=seed, persistence=0.5)
+    n = (n - n.min()) / (n.max() - n.min())
+    base = lerp_color(NIGHT_BG, NIGHT_SURFACE, n * 0.85 + 0.15)
+    fine = tileable_noise(size, 40, octaves=2, seed=seed + 1, persistence=0.5)
+    base = base * (0.82 + 0.18 * fine[..., None])
+
+    mortar = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(mortar)
+    course_h = size // 6
+    block_w = size // 4
+    for row, y in enumerate(range(0, size + course_h, course_h)):
+        d.line([(0, y), (size, y)], fill=140, width=2)
+        offset = (block_w // 2) if row % 2 else 0
+        for x in range(-offset, size + block_w, block_w):
+            d.line([(x, max(0, y - course_h)), (x, y)], fill=110, width=2)
+    mortar = mortar.filter(ImageFilter.GaussianBlur(1.2))
+    mortar_arr = np.asarray(mortar, dtype=np.float32) / 255.0
+    base = base * (1 - 0.16 * mortar_arr[..., None]) + np.array(NIGHT_ACCENT) * (0.14 * mortar_arr[..., None])
+
+    blotch = tileable_noise(size, 5, octaves=3, seed=seed + 2, persistence=0.6)
+    blotch = np.clip((blotch - 0.62) * 3.0, 0, 1)
+    base = base * (1 - 0.22 * blotch[..., None]) + np.array(NIGHT_BORDER) * (0.22 * blotch[..., None])
+
+    save("limestone-night.jpg", base)
+
+
 def redstone(size=768, seed=11):
     """Warm red sandstone accent texture — for a header band, a card top
     rule, or anywhere the app's decorative --redstone tones could use real
@@ -168,6 +219,21 @@ def parchment(size=640, seed=21):
     save("parchment.jpg", base)
 
 
+def parchment_night(size=640, seed=121):
+    """Dark card-panel variant of parchment(), for the night-vigil theme --
+    same reasoning as limestone_night() above: .card's --parchment-tex used
+    to stay the pale day image in night mode too."""
+    n = tileable_noise(size, 8, octaves=5, seed=seed, persistence=0.5)
+    n = (n - n.min()) / (n.max() - n.min())
+    base = lerp_color(NIGHT_SURFACE, NIGHT_SURFACE2, n * 0.55)
+    grain = tileable_noise(size, 90, octaves=2, seed=seed + 1, persistence=0.5)
+    base = base * (0.90 + 0.10 * grain[..., None])
+    blotch = tileable_noise(size, 4, octaves=3, seed=seed + 2, persistence=0.6)
+    blotch = np.clip((blotch - 0.68) * 4.0, 0, 1)
+    base = base * (1 - 0.14 * blotch[..., None]) + np.array(NIGHT_BORDER) * (0.14 * blotch[..., None])
+    save("parchment-night.jpg", base)
+
+
 def oak(size=640, seed=31):
     """Streaky oak plank grain — reserved for a header/footer wood band."""
     n = anisotropic_noise(size, cells_x=2, cells_y=18, octaves=4, seed=seed, persistence=0.55)
@@ -189,6 +255,8 @@ if __name__ == "__main__":
     import os
     os.makedirs(OUT, exist_ok=True)
     limestone()
+    limestone_night()
     redstone()
     parchment()
+    parchment_night()
     oak()

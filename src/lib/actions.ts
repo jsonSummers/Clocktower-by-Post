@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PhaseKind } from './clock';
+import type { DealResult } from './scripts/deal';
 
 /**
  * Thin wrappers around the writes each screen makes. Every one takes the client
@@ -30,6 +31,49 @@ export function assignRole(
 
 export function setGrimoireNote(c: SupabaseClient, gameId: string, seatId: string, notes: string) {
 	return c.from('grimoire').upsert({ seat_id: seatId, game_id: gameId, notes });
+}
+
+/**
+ * Writes a dealGame() result to the database: replaces every seat_roles row
+ * for the game, clears any previous red herring and sets the new one,
+ * records the composition actually used (accounting for Baron's swing if it
+ * was drawn), and clears night_actions so a redeal starts night info fresh.
+ * Storyteller-only, per the same RLS every other write here relies on.
+ */
+export async function applyDeal(c: SupabaseClient, gameId: string, result: DealResult) {
+	const { error: clearRolesErr } = await c.from('seat_roles').delete().eq('game_id', gameId);
+	if (clearRolesErr) return { error: clearRolesErr };
+
+	const { error: clearHerringErr } = await c
+		.from('grimoire')
+		.update({ is_red_herring: false })
+		.eq('game_id', gameId);
+	if (clearHerringErr) return { error: clearHerringErr };
+
+	const { error: clearActionsErr } = await c.from('night_actions').delete().eq('game_id', gameId);
+	if (clearActionsErr) return { error: clearActionsErr };
+
+	const rows = [...result.assignments.entries()].map(([seat_id, character_id]) => ({
+		seat_id,
+		game_id: gameId,
+		character_id
+	}));
+	if (rows.length) {
+		const { error } = await c.from('seat_roles').insert(rows);
+		if (error) return { error };
+	}
+
+	if (result.redHerringSeatId) {
+		const { error } = await c
+			.from('grimoire')
+			.upsert(
+				{ seat_id: result.redHerringSeatId, game_id: gameId, is_red_herring: true },
+				{ onConflict: 'seat_id' }
+			);
+		if (error) return { error };
+	}
+
+	return c.from('games').update({ composition: result.comp }).eq('id', gameId);
 }
 
 // ---- seat lifecycle ----
@@ -152,4 +196,17 @@ export function reopenNightChoice(c: SupabaseClient, actionId: string) {
 /** Storyteller clears a seat's night action entirely, so it can be redrafted from scratch. */
 export function clearNightAction(c: SupabaseClient, actionId: string) {
 	return c.from('night_actions').delete().eq('id', actionId);
+}
+
+/** Storyteller appends a computed reveal onto an already-submitted choose-type
+ * answer, without touching the picks (Fortune Teller's yes/no, Ravenkeeper's
+ * revealed character) — reuses the one `result` field rather than a schema
+ * change, since night_actions allows only one row per seat per night. */
+export function sendChoiceReading(
+	c: SupabaseClient,
+	actionId: string,
+	picks: string[],
+	reading: string
+) {
+	return c.from('night_actions').update({ result: JSON.stringify({ picks, reading }) }).eq('id', actionId);
 }
