@@ -20,6 +20,8 @@ The character roster itself is parsed straight out of
 src/lib/scripts/trouble-brewing.ts, so adding a new character there is
 picked up automatically next run — nothing to update in this file for that.
 """
+from __future__ import annotations  # keeps `Path | None` etc. working on Python < 3.10
+
 import argparse
 import re
 import sys
