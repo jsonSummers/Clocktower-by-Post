@@ -2,6 +2,91 @@
 
 Short records of choices that would otherwise be hard to reconstruct. Newest first.
 
+## 2026-09-12 — Spy's grimoire, a real RLS bug behind "confirm does nothing", red herring UI, and a nomination/vote system
+
+Feedback from another live-testing pass: "the spy doesn't get to see the
+grimoire at night"; "the confirm button doesn't seem to work on many bits,
+e.g. when i picked two characters as fortune teller nothing happened, same
+for monk"; "it isnt clear enough how to assign red herring, could be like
+drunk"; "the circle could use jazzing up... having drunk symbols and red
+herring symbols"; and "there isn't a clear point to vote" plus a description
+of the accusation/defence/vote/execution flow, asking for a system covering
+the main parts of it.
+
+- **Spy fixed — was entirely unimplemented.** `NightDispatch.svelte`'s
+  `kind === 'grimoire'` branch was a static "nothing to send here" message,
+  and `PlayerView.svelte` unconditionally showed "the Storyteller will show
+  you in person" for that prompt kind, checked *before* it ever looked at
+  `nightRow.result` — so even if something had been sent, the Spy would
+  never have seen it. Added a "Send grimoire snapshot" button that composes
+  every seat's true character (the Drunk's real identity, not their cover;
+  the red herring flagged) as plain text and sends it like any other info;
+  `PlayerView` now renders `nightRow.result` when it's there. On Night 1 this
+  folds together with the evil-team reveal into one message (same
+  one-row-per-seat-per-night constraint that already makes the Poisoner fold
+  its reveal into its ask) — `isRevealOnly()` no longer treats `'grimoire'`
+  as reveal-only-forever, only `'none'` (Scarlet Woman, Baron) is.
+- **The "confirm does nothing" bug was a real RLS bug, not a UI bug.** The
+  `night_actions_update` policy had a `using` clause requiring
+  `result is null`, no separate `with check` — and per Postgres's default,
+  no `with check` means the `using` expression is reused against the *new*
+  row too. So a player's own answer (`submitNightChoice` setting
+  `result = ...`) always produced a new row that fails that same
+  `result is null` requirement, and the update was silently rejected by RLS.
+  This affected every choose-type character (Monk, Fortune Teller,
+  Ravenkeeper's post-death pick, ...) — not a Fortune-Teller-specific bug.
+  Fixed with an explicit `with check` that only re-requires ownership, not an
+  unchanged `result`. **Requires re-running `db/schema.sql`** in the Supabase
+  SQL editor — it's a schema/policy change, not something client code alone
+  can fix.
+- **Red herring gets the same treatment as the Drunk.** New `setRedHerring`/
+  `clearRedHerring` actions (clear-then-set, since only one seat can hold it)
+  and a "🐟 Make red herring" / clear button per seat row on the host page,
+  next to the existing "🍺 Make Drunk" control — previously the only way to
+  set it was the auto-deal, with no manual UI at all.
+- **Circle markers.** `Circle.svelte` gained an optional `markFor` prop (a
+  small corner badge, alongside the existing `labelFor`) — wired up on the
+  Storyteller's Seats-tab circle only (🍺 Drunk, 🐟 red herring); never passed
+  for a player's own Circle, since that's secret information.
+- **Nomination/vote system — reverses an earlier decision.** The original
+  design (see `InfoDrawer.svelte`'s help text and comments in
+  `winCondition.ts`) deliberately kept nominations, debate, and voting
+  entirely in-person, on the theory that raising hands in a circle is core to
+  the game's feel and the app should stay out of the way. In practice, for a
+  group mingling around a wider party (this project's whole premise), that
+  doesn't hold — a vote needs everyone looking at the same circle at the same
+  moment, which a scattered party can't guarantee. So: nomination and debate
+  stay verbal/in-person (that part still works fine and is worth keeping),
+  but the app now runs the vote itself.
+  - New tables `nominations` and `votes`, plus RPCs `open_nomination`,
+    `start_voting`, `cast_vote`, `retract_vote`, `close_nomination` in
+    `db/schema.sql` — see that file's comments for the exact rules enforced
+    (one open nomination per game at a time, once per seat per day, ghost
+    votes spent on close). Voting itself is a "raise hand" model: a `votes`
+    row's presence is the yes vote, there's no explicit no, matching the
+    physical game. Writes go through the RPCs (`SECURITY DEFINER`), not
+    direct table policies, specifically to avoid a repeat of the RLS bug
+    above.
+  - Host page gets a new **Vote** tab: open a nomination (nominee, optional
+    nominator, optional debate seconds — shown as text, nothing auto-times
+    it), a manual "Start voting" button, a live raised-hands list against the
+    existing majority threshold (`voteState()`), "Close vote", and — if
+    majority was reached — an "Execute" button (with a text nudge to do the
+    traditional 3-2-1 count out loud first; nothing in the app dramatizes the
+    countdown itself).
+  - Players get a **Nomination** card on their own screen once one is open:
+    who's nominated, a "Raise hand to vote" toggle once voting starts (dead
+    seats only if their ghost vote is unspent), and a buzz when a nomination
+    opens or moves into voting — the actual point of doing this digitally,
+    so it reaches people out of earshot.
+  - **Deliberate simplification vs. the official rule:** officially, an
+    execution is held open until the end of the day — if a later nomination
+    that same day draws more votes, *it* gets executed instead, and a tie for
+    the top spot means no one dies. This app resolves each nomination as its
+    own vote closes and leaves the "was there a later, bigger vote today"
+    comparison to the Storyteller's judgment rather than automating it —
+    something the user explicitly said didn't need to be exact.
+
 ## 2026-09-11c — Drunk mechanics, death-triggered night prompts, Night 1 reveal reliability, clickable circle
 
 Four more fixes from a further live-testing pass: "when someone is given

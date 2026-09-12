@@ -60,6 +60,25 @@ export function clearDrunk(c: SupabaseClient, seatId: string) {
 	return c.from('grimoire').update({ real_character_id: null }).eq('seat_id', seatId);
 }
 
+/** Storyteller marks a seat as the Fortune Teller's red herring — clears any
+ * previous one first, since only one seat can hold it at a time (same rule
+ * applyDeal() follows when a Fortune Teller is auto-dealt). */
+export async function setRedHerring(c: SupabaseClient, gameId: string, seatId: string) {
+	const { error: clearErr } = await c
+		.from('grimoire')
+		.update({ is_red_herring: false })
+		.eq('game_id', gameId);
+	if (clearErr) return { error: clearErr };
+	return c
+		.from('grimoire')
+		.upsert({ seat_id: seatId, game_id: gameId, is_red_herring: true }, { onConflict: 'seat_id' });
+}
+
+/** Storyteller clears the red herring without assigning a new one. */
+export function clearRedHerring(c: SupabaseClient, gameId: string) {
+	return c.from('grimoire').update({ is_red_herring: false }).eq('game_id', gameId);
+}
+
 /**
  * Writes a dealGame() result to the database: replaces every seat_roles row
  * for the game, clears any previous red herring and Drunk marker and sets
@@ -242,4 +261,63 @@ export function sendChoiceReading(
 	reading: string
 ) {
 	return c.from('night_actions').update({ result: JSON.stringify({ picks, reading }) }).eq('id', actionId);
+}
+
+// ---- nominations / voting (day phase) ----
+// See db/schema.sql's "nominations / voting" section for the full rules
+// these RPCs enforce (one open nomination at a time, once-per-day-per-seat,
+// ghost-vote gating). Executing the nominee is a separate, explicit call to
+// the existing setSeatAlive() above — these functions only run the
+// debate/vote mechanics, not the outcome.
+
+/** Storyteller opens a nomination. `debateSeconds` is optional — purely a
+ * countdown the UI can show; the Storyteller still moves the stage forward
+ * by hand via startVoting(), nothing auto-advances. */
+export function openNomination(
+	c: SupabaseClient,
+	gameId: string,
+	nomineeSeatId: string,
+	nominatorSeatId: string | null,
+	debateSeconds: number | null
+) {
+	return c.rpc('open_nomination', {
+		p_game_id: gameId,
+		p_nominee_seat_id: nomineeSeatId,
+		p_nominator_seat_id: nominatorSeatId,
+		p_debate_seconds: debateSeconds
+	});
+}
+
+/** Storyteller moves a nomination from debate into voting. */
+export function startVoting(c: SupabaseClient, nominationId: string) {
+	return c.rpc('start_voting', { p_nomination_id: nominationId });
+}
+
+/** A seat raises its hand — cast as whichever seat auth.uid() owns, server-side. */
+export function castVote(c: SupabaseClient, nominationId: string) {
+	return c.rpc('cast_vote', { p_nomination_id: nominationId });
+}
+
+/** A seat lowers its hand again before the vote closes. */
+export function retractVote(c: SupabaseClient, nominationId: string) {
+	return c.rpc('retract_vote', { p_nomination_id: nominationId });
+}
+
+/** Storyteller locks in the tally and spends any ghost votes used. */
+export function closeNomination(c: SupabaseClient, nominationId: string) {
+	return c.rpc('close_nomination', { p_nomination_id: nominationId });
+}
+
+/** Storyteller records the nomination as executed (the seat's alive flag is
+ * flipped separately via setSeatAlive — this just tags which nomination
+ * caused it, for the day's history). */
+export function markExecuted(c: SupabaseClient, nominationId: string) {
+	return c.from('nominations').update({ executed: true }).eq('id', nominationId);
+}
+
+/** Storyteller dismisses an open nomination without a vote (mis-click, or a
+ * player withdraws it) — deletes it outright rather than closing with zero
+ * votes, so it doesn't count against that seat's once-per-day limit. */
+export function dismissNomination(c: SupabaseClient, nominationId: string) {
+	return c.from('nominations').delete().eq('id', nominationId);
 }

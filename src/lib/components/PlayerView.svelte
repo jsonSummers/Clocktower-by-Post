@@ -2,7 +2,8 @@
 	import { serverTimeSynced } from '$lib/server-time';
 	import { GameSession } from '$lib/game.svelte';
 	import { getScript, getCharacter } from '$lib/scripts';
-	import { requestMeet, leaveSeat, submitNightChoice } from '$lib/actions';
+	import { voteState } from '$lib/scripts/winCondition';
+	import { requestMeet, leaveSeat, submitNightChoice, castVote, retractVote } from '$lib/actions';
 	import Circle from './Circle.svelte';
 	import ClockFace from './ClockFace.svelte';
 	import InfoDrawer from './InfoDrawer.svelte';
@@ -66,6 +67,49 @@
 		const { error } = await submitNightChoice(session.client, nightRow.id, selectedSeatIds);
 		if (error) actionError = error.message;
 	}
+	// ---- nomination / voting ----
+	const nom = $derived(session.latestNomination);
+	const nomVotes = $derived(session.votesForLatest);
+	const nomThreshold = $derived(voteState(session.seats).votesToExecute);
+	const nomineeName = $derived(
+		nom ? (session.seats.find((s) => s.id === nom.nominee_seat_id)?.name ?? '?') : ''
+	);
+	const nominatorName = $derived(
+		nom?.nominator_seat_id
+			? (session.seats.find((s) => s.id === nom.nominator_seat_id)?.name ?? null)
+			: null
+	);
+	const canVote = $derived(
+		session.mySeat && (session.mySeat.alive || session.mySeat.ghost_vote_available)
+	);
+	let voting = $state(false);
+	async function toggleVote() {
+		if (!nom) return;
+		voting = true;
+		actionError = null;
+		const { error } = session.myVoteCast
+			? await retractVote(session.client, nom.id)
+			: await castVote(session.client, nom.id);
+		if (error) actionError = error instanceof Error ? error.message : String(error);
+		voting = false;
+	}
+
+	// Buzz once when a nomination newly opens or moves into voting — the
+	// point of doing this on the phone at all, for a party spread out beyond
+	// earshot of "I nominate...".
+	let sawNomination = false;
+	let lastNomSig = '';
+	$effect(() => {
+		const sig = nom ? `${nom.id}:${nom.stage}` : '';
+		if (!sawNomination) {
+			sawNomination = true;
+			lastNomSig = sig;
+			return;
+		}
+		if (sig !== lastNomSig && sig !== '') buzz();
+		lastNomSig = sig;
+	});
+
 	const neighbourIds = $derived(
 		[session.myNeighbours.ccw?.id, session.myNeighbours.cw?.id].filter(Boolean) as string[]
 	);
@@ -207,6 +251,42 @@
 				{/if}
 			</section>
 
+			{#if nom}
+				<section class="card stack nom-card">
+					<strong>Nomination</strong>
+					<p style="margin:0">
+						<strong>{nomineeName}</strong> has been nominated{#if nominatorName}
+							by <strong>{nominatorName}</strong>{/if}.
+					</p>
+					{#if nom.stage === 'debate'}
+						<p class="muted" style="margin:0">Debate — listen up.</p>
+					{:else if nom.stage === 'voting'}
+						<p class="muted" style="margin:0">
+							{nomVotes.length} of {nomThreshold} needed
+						</p>
+						{#if session.mySeat}
+							<button
+								class="primary"
+								disabled={!canVote || voting}
+								onclick={toggleVote}
+							>
+								{session.myVoteCast ? 'Lower hand' : '✋ Raise hand to vote'}
+							</button>
+							{#if !canVote}
+								<p class="muted" style="margin:0;font-size:0.8rem">
+									You've used your ghost vote for the rest of the game.
+								</p>
+							{/if}
+						{/if}
+					{:else}
+						<p class="muted" style="margin:0">
+							{nomVotes.length} of {nomThreshold} needed
+							{nom.executed ? `— ${nomineeName} was executed.` : '— no execution.'}
+						</p>
+					{/if}
+				</section>
+			{/if}
+
 			{#if actsTonight}
 				<section class="card stack night-card" class:pulsing={newNightInfo}>
 					<div class="row" style="justify-content:space-between;align-items:center">
@@ -214,9 +294,14 @@
 						{#if newNightInfo}<span class="new-badge">New</span>{/if}
 					</div>
 					{#if roleChar?.prompt.kind === 'grimoire'}
-						<p class="muted" style="margin:0">
-							The Storyteller will show you the grimoire tonight — no action needed here.
-						</p>
+						{#if nightRow?.result}
+							<p class="grimoire-snapshot">{nightRow.result}</p>
+						{:else}
+							<p class="muted" style="margin:0">
+								The Storyteller will show you the grimoire tonight — nothing to do here, just wait
+								for it.
+							</p>
+						{/if}
 					{:else if !nightRow}
 						<p class="muted" style="margin:0">Waiting for the Storyteller…</p>
 					{:else if roleChar?.prompt.kind === 'choose'}
@@ -361,5 +446,13 @@
 	.team-tag.minion,
 	.team-tag.demon {
 		color: var(--danger);
+	}
+	.grimoire-snapshot {
+		margin: 0;
+		white-space: pre-wrap;
+		font-size: 0.9rem;
+	}
+	.nom-card {
+		border-left: 3px solid var(--danger);
 	}
 </style>

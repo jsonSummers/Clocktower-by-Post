@@ -104,13 +104,14 @@
 		return evilRevealMap.get(characterId) ?? null;
 	}
 	/** True when the Night 1 reveal IS the whole message for this character
-	 * (Imp/demon — no kill tonight; Spy/grimoire; Scarlet Woman & Baron/none) —
-	 * as opposed to a role that also has its own action that night (Poisoner),
-	 * where the reveal is folded into that ask instead, since night_actions
+	 * (Imp/demon — no kill tonight; Scarlet Woman & Baron/none) — as opposed to
+	 * a role that also has its own action that night (Poisoner's choose; the
+	 * Spy's grimoire, which happens every night including the first), where
+	 * the reveal is folded into that action instead, since night_actions
 	 * allows only one row per seat per night. */
 	function isRevealOnly(character: Character): boolean {
 		if (character.team === 'demon') return character.prompt.kind === 'choose';
-		if (character.team === 'minion') return character.prompt.kind === 'grimoire' || character.prompt.kind === 'none';
+		if (character.team === 'minion') return character.prompt.kind === 'none';
 		return false;
 	}
 	function isDemonSeat(seatId: string): boolean {
@@ -189,6 +190,29 @@
 		const s = session.seats.find((x) => x.id === id);
 		return s ? s.name || `Seat ${s.seat_index + 1}` : '?';
 	}
+
+	/** The Spy's "sees the grimoire" ability, as a one-shot snapshot text sent
+	 * like any other info — every seat's true character (the Drunk's REAL
+	 * identity, not their cover story) and the red herring, exactly what the
+	 * physical grimoire book would show. Taken fresh each time the button is
+	 * clicked, so re-sending after a death or a new deal is just a click. */
+	function grimoireSnapshotText(): string {
+		if (!script) return '';
+		const ordered = [...session.seats].sort((a, b) => a.seat_index - b.seat_index);
+		const lines = ordered.map((seat) => {
+			const label = seat.name || `Seat ${seat.seat_index + 1}`;
+			const trueCharId = isDrunkSeat(seat.id) ? 'drunk' : session.roleFor(seat.id);
+			const charName = trueCharId
+				? (getCharacter(script!, trueCharId)?.name ?? trueCharId)
+				: '— no character —';
+			const tags = [
+				!seat.alive && 'dead',
+				seat.id === session.redHerringSeatId && 'red herring'
+			].filter(Boolean);
+			return `${label} — ${charName}${tags.length ? ` (${tags.join(', ')})` : ''}`;
+		});
+		return lines.join('\n');
+	}
 </script>
 
 {#if night == null}
@@ -259,7 +283,57 @@
 						</button>
 					{/if}
 				{:else if kind === 'grimoire'}
-					<p class="muted" style="margin:0">Sees the full grimoire — nothing to send here.</p>
+					{#if reveal}
+						<p class="revealbox">{reveal}</p>
+					{/if}
+					{#if !live}
+						<p class="muted hint" style="margin:0">
+							Sends a snapshot of every seat's true character — preview only, switch to the real
+							night to send.
+						</p>
+					{:else if action?.result}
+						<p class="grimoire-snapshot">{action.result}</p>
+						<div class="row">
+							<button
+								onclick={() =>
+									run(
+										sendNightInfo(
+											session.client,
+											gameId,
+											night!,
+											step.seat.id,
+											step.character.id,
+											'',
+											reveal ? `${reveal}\n\n${grimoireSnapshotText()}` : grimoireSnapshotText()
+										)
+									)}
+							>
+								Refresh &amp; resend
+							</button>
+						</div>
+					{:else}
+						<p class="muted" style="margin:0">
+							Sees the full grimoire — every seat's true character (the Drunk's real identity, not
+							their cover) and the red herring.
+						</p>
+						<button
+							class="primary"
+							onclick={() =>
+								run(
+									sendNightInfo(
+										session.client,
+										gameId,
+										night!,
+										step.seat.id,
+										step.character.id,
+										'',
+										reveal ? `${reveal}\n\n${grimoireSnapshotText()}` : grimoireSnapshotText()
+									)
+								)}
+						>
+							Send grimoire snapshot to {step.seat.name || 'them'}
+						</button>
+					{/if}
 				{:else if kind === 'choose'}
 					{#if step.character.prompt.kind === 'choose'}
 						{@const alive = session.seats.filter((s) => s.alive)}
@@ -521,5 +595,14 @@
 	}
 	.hint {
 		font-size: 0.78rem;
+	}
+	.grimoire-snapshot {
+		margin: 0;
+		white-space: pre-wrap;
+		font-size: 0.85rem;
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 0.55rem 0.7rem;
 	}
 </style>

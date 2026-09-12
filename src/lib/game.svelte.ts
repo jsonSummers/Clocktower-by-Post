@@ -4,7 +4,16 @@ import { syncServerTime, currentOffset } from './server-time';
 import { phaseFromGame } from './phase';
 import { livingNeighbours } from './circle';
 import { readClock, formatClock, phaseLabel, type ClockView, type PhaseState } from './clock';
-import type { GameRow, SeatRow, SeatRoleRow, MeetRequestRow, NightActionRow, GrimoireRow } from './types';
+import type {
+	GameRow,
+	SeatRow,
+	SeatRoleRow,
+	MeetRequestRow,
+	NightActionRow,
+	GrimoireRow,
+	NominationRow,
+	VoteRow
+} from './types';
 
 /** How often we poll as a fallback, independent of realtime channel health. */
 const POLL_INTERVAL_MS = 4000;
@@ -15,7 +24,15 @@ const RECONNECT_MAX_MS = 15000;
 export type RealtimeStatus = 'connecting' | 'live' | 'reconnecting' | 'polling';
 
 /** Signatures of last-seen data per table, used to detect real changes cheaply. */
-type DataSig = { seats: string; roles: string; meet: string; night: string; grimoire: string };
+type DataSig = {
+	seats: string;
+	roles: string;
+	meet: string;
+	night: string;
+	grimoire: string;
+	nominations: string;
+	votes: string;
+};
 
 /**
  * Live view of one game for a single client (a real device, or one simulated
@@ -43,6 +60,10 @@ export class GameSession {
 	nightActions = $state<NightActionRow[]>([]);
 	/** Storyteller-only per RLS — a player's client always sees an empty array here. */
 	grimoire = $state<GrimoireRow[]>([]);
+	/** Every nomination for the game (open and closed) — visible to everyone seated. */
+	nominations = $state<NominationRow[]>([]);
+	/** Every raised hand across every nomination — also visible to everyone (voting is public). */
+	votes = $state<VoteRow[]>([]);
 	error = $state<string | null>(null);
 	now = $state(Date.now());
 	userId = $state<string | null>(null);
@@ -61,7 +82,15 @@ export class GameSession {
 	#reconnectAttempts = 0;
 	#stopped = false;
 
-	#sig: DataSig = { seats: '', roles: '', meet: '', night: '', grimoire: '' };
+	#sig: DataSig = {
+		seats: '',
+		roles: '',
+		meet: '',
+		night: '',
+		grimoire: '',
+		nominations: '',
+		votes: ''
+	};
 
 	constructor(client: SupabaseClient = supabase) {
 		this.#client = client;
@@ -103,6 +132,29 @@ export class GameSession {
 	);
 	/** Alive seats that hold an actual player (empty seats never count). */
 	readonly aliveSeats = $derived(this.seats.filter((s) => s.alive && s.user_id !== null));
+	/** The one nomination still in play (debate or voting), if any — only one
+	 * can ever be open per game (open_nomination() enforces it). */
+	readonly openNomination = $derived<NominationRow | null>(
+		this.nominations.find((n) => n.stage !== 'closed') ?? null
+	);
+	/** The most recently touched nomination, open or not — so the last result
+	 * stays visible for a moment after a vote closes, instead of the whole
+	 * card vanishing the instant it's resolved. */
+	readonly latestNomination = $derived<NominationRow | null>(
+		[...this.nominations].sort(
+			(a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+		)[0] ?? null
+	);
+	/** Every raised hand on the currently-shown nomination (open or latest). */
+	readonly votesForLatest = $derived<VoteRow[]>(
+		this.latestNomination
+			? this.votes.filter((v) => v.nomination_id === this.latestNomination!.id)
+			: []
+	);
+	/** Whether this client's own seat has raised its hand on the latest nomination. */
+	readonly myVoteCast = $derived(
+		this.mySeat ? this.votesForLatest.some((v) => v.seat_id === this.mySeat!.id) : false
+	);
 
 	roleFor(seatId: string): string | null {
 		return this.roles.find((r) => r.seat_id === seatId)?.character_id ?? null;
@@ -177,6 +229,20 @@ export class GameSession {
 				{ event: '*', schema: 'public', table: 'grimoire', filter: `game_id=eq.${gameId}` },
 				() => this.refreshGrimoire()
 			)
+			.on(
+				'postgres_changes',
+				{ event: '*', schema: 'public', table: 'nominations', filter: `game_id=eq.${gameId}` },
+				() => this.refreshNominations()
+			)
+			.on(
+				// votes has no game_id column of its own (it hangs off
+				// nominations), so it can't be filtered server-side — just
+				// refetch on any change and let the client-side join do the
+				// filtering, same as it already does for reads.
+				'postgres_changes',
+				{ event: '*', schema: 'public', table: 'votes' },
+				() => this.refreshVotes()
+			)
 			.subscribe((status) => {
 				if (this.#stopped) return;
 				if (status === 'SUBSCRIBED') {
@@ -208,7 +274,9 @@ export class GameSession {
 			this.refreshRoles(),
 			this.refreshMeet(),
 			this.refreshNightActions(),
-			this.refreshGrimoire()
+			this.refreshGrimoire(),
+			this.refreshNominations(),
+			this.refreshVotes()
 		]);
 	}
 
@@ -260,6 +328,24 @@ export class GameSession {
 		const { data } = await this.#client.from('grimoire').select('*').eq('game_id', this.#gameId);
 		const rows = (data ?? []) as GrimoireRow[];
 		this.#applyIfChanged('grimoire', rows, () => (this.grimoire = rows));
+	}
+
+	async refreshNominations() {
+		const { data } = await this.#client
+			.from('nominations')
+			.select('*')
+			.eq('game_id', this.#gameId)
+			.order('created_at');
+		const rows = (data ?? []) as NominationRow[];
+		this.#applyIfChanged('nominations', rows, () => (this.nominations = rows));
+	}
+
+	/** votes has no game_id of its own — RLS (via a join to nominations) is
+	 * what scopes this to the caller's own game, same as every read here. */
+	async refreshVotes() {
+		const { data } = await this.#client.from('votes').select('*');
+		const rows = (data ?? []) as VoteRow[];
+		this.#applyIfChanged('votes', rows, () => (this.votes = rows));
 	}
 
 	stop() {

@@ -10,6 +10,10 @@
 		highlightIds?: string[];
 		/** optional secondary line under the name, e.g. an assigned character */
 		labelFor?: (seat: SeatRow) => string | null;
+		/** optional small badge in the seat's corner — Storyteller-only markers
+		 * like 🍺 Drunk or 🐟 red herring. Never pass this for a player's own
+		 * Circle; it's secret information. */
+		markFor?: (seat: SeatRow) => string | null;
 		onselect?: (seatId: string) => void;
 		center?: Snippet;
 	}
@@ -19,6 +23,7 @@
 		meSeatId = null,
 		highlightIds = [],
 		labelFor,
+		markFor,
 		onselect,
 		center
 	}: Props = $props();
@@ -33,6 +38,7 @@
 	{/if}
 	{#each ordered as seat, i (seat.id)}
 		{@const label = labelFor?.(seat) ?? null}
+		{@const mark = markFor?.(seat) ?? null}
 		{@const cls = [
 			'seat',
 			seat.id === meSeatId && 'me',
@@ -46,11 +52,13 @@
 		{@const pos = `left:${points[i].x * 100}%; top:${points[i].y * 100}%`}
 		{#if onselect}
 			<button class={cls} style={pos} onclick={() => onselect(seat.id)}>
+				{#if mark}<span class="mark">{mark}</span>{/if}
 				<span class="name">{seat.name || `Seat ${seat.seat_index + 1}`}</span>
 				{#if label}<span class="role">{label}</span>{/if}
 			</button>
 		{:else}
 			<div class={cls} style={pos}>
+				{#if mark}<span class="mark">{mark}</span>{/if}
 				<span class="name">{seat.name || `Seat ${seat.seat_index + 1}`}</span>
 				{#if label}<span class="role">{label}</span>{/if}
 			</div>
@@ -94,6 +102,17 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.1rem;
+	}
+	/* .seat is itself absolutely positioned against the ring, but its own
+	   badge needs to hang off the seat's own box — position: relative above
+	   plus this absolute child does that without disturbing the ring math. */
+	.seat .mark {
+		position: absolute;
+		top: -0.5rem;
+		right: -0.4rem;
+		font-size: 0.85rem;
+		line-height: 1;
+		filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
 	}
 	.seat .name {
 		font-weight: 600;

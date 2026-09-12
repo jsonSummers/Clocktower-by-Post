@@ -43,8 +43,10 @@
 					screen.
 				</p>
 				<p>
-					Nominations, votes and executions happen <strong>in person</strong> when the group gathers
-					— the app just keeps time and passes you what you need to know.
+					Nominations and debate still happen <strong>out loud, in person</strong> — that's the
+					whole point. Once the Storyteller opens the vote, though, a <strong>Nomination</strong>
+					card appears here with a button to raise your hand, so a vote still works even if the group
+					is spread around a bigger party and not all within sight of each other.
 				</p>
 				<p>
 					Stuck, or need a private word? Use <strong>Ask to see the Storyteller</strong> and they'll

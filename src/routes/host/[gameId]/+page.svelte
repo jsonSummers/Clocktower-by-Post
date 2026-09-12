@@ -17,9 +17,16 @@
 		setGhostVoteAvailable,
 		setDrunk,
 		clearDrunk,
+		setRedHerring,
+		clearRedHerring,
 		resolveMeet,
 		moveSeat,
-		kickSeat
+		kickSeat,
+		openNomination,
+		startVoting,
+		closeNomination,
+		markExecuted,
+		dismissNomination
 	} from '$lib/actions';
 	import type { Team } from '$lib/types';
 	import Circle from '$lib/components/Circle.svelte';
@@ -30,7 +37,7 @@
 	const gameId = page.params.gameId!;
 	const session = new GameSession();
 
-	type Tab = 'clock' | 'seats' | 'night' | 'requests';
+	type Tab = 'clock' | 'seats' | 'night' | 'vote' | 'requests';
 	let tab = $state<Tab>('clock');
 	let minutes = $state(12);
 	let gatherReason = $state('');
@@ -54,6 +61,42 @@
 
 	const winState = $derived(checkWinCondition(session.seats, session.roles, script));
 	const votes = $derived(voteState(session.seats));
+
+	// ---- nominations / voting ----
+	let nomineeSeatId = $state('');
+	let nominatorSeatId = $state('');
+	let debateSeconds = $state(60);
+	const livingClaimed = $derived(session.seats.filter((s) => s.user_id && s.alive));
+	const openNom = $derived(session.openNomination);
+	const latestNom = $derived(session.latestNomination);
+	const latestVotes = $derived(session.votesForLatest);
+	const todaysNominations = $derived(
+		session.nominations.filter((n) => n.cycle === (session.phase?.cycle ?? -1))
+	);
+	function seatById(id: string | null): (typeof session.seats)[number] | undefined {
+		return id ? session.seats.find((s) => s.id === id) : undefined;
+	}
+	function seatLabel(id: string | null): string {
+		const s = seatById(id);
+		return s ? s.name || `Seat ${s.seat_index + 1}` : '—';
+	}
+	function doOpenNomination() {
+		if (!nomineeSeatId) return;
+		run(
+			openNomination(
+				supabase,
+				gameId,
+				nomineeSeatId,
+				nominatorSeatId || null,
+				debateSeconds > 0 ? debateSeconds : null
+			)
+		).then(() => (nomineeSeatId = ''));
+	}
+	async function executeNominee() {
+		if (!latestNom) return;
+		await run(setSeatAlive(supabase, latestNom.nominee_seat_id, false));
+		await run(markExecuted(supabase, latestNom.id));
+	}
 	// Only surface the win check once the game is actually being played — not
 	// during lobby setup (before roles/seats have settled) or after the
 	// Storyteller has already ended it.
@@ -91,6 +134,10 @@
 
 	function isDrunk(seatId: string): boolean {
 		return session.grimoire.find((g) => g.seat_id === seatId)?.real_character_id === 'drunk';
+	}
+
+	function isRedHerring(seatId: string): boolean {
+		return session.redHerringSeatId === seatId;
 	}
 
 	/** Assigns a random not-in-play Townsfolk as this seat's cover story and
@@ -230,6 +277,9 @@
 			<button class:active={tab === 'clock'} onclick={() => (tab = 'clock')}>Clock</button>
 			<button class:active={tab === 'seats'} onclick={() => (tab = 'seats')}>Seats</button>
 			<button class:active={tab === 'night'} onclick={() => (tab = 'night')}>Night</button>
+			<button class:active={tab === 'vote'} onclick={() => (tab = 'vote')}>
+				Vote{#if openNom} <span class="badge">1</span>{/if}
+			</button>
 			<button class:active={tab === 'requests'} onclick={() => (tab = 'requests')}>
 				Requests{#if waiting.length} <span class="badge">{waiting.length}</span>{/if}
 			</button>
@@ -264,7 +314,12 @@
 			</section>
 		{:else if tab === 'seats'}
 			<section class="card">
-				<Circle seats={session.seats} labelFor={(s) => roleName(s.id)} onselect={jumpToSeat} />
+				<Circle
+					seats={session.seats}
+					labelFor={(s) => roleName(s.id)}
+					markFor={(s) => (isDrunk(s.id) ? '🍺' : isRedHerring(s.id) ? '🐟' : null)}
+					onselect={jumpToSeat}
+				/>
 				<p class="muted" style="text-align:center;margin:0.4rem 0 0">Tap a seat to jump to it below.</p>
 			</section>
 			<section class="card stack">
@@ -346,6 +401,26 @@
 								🍺 Make Drunk
 							</button>
 						{/if}
+						{#if isRedHerring(seat.id)}
+							<div class="row" style="align-items:center;gap:0.4rem">
+								<span class="drunktag">🐟 Fortune Teller's red herring</span>
+								<button
+									class="ghostvote"
+									onclick={() => run(clearRedHerring(supabase, gameId))}
+									title="Undo — no seat is marked as the red herring"
+								>
+									Clear
+								</button>
+							</div>
+						{:else}
+							<button
+								class="ghostvote"
+								onclick={() => run(setRedHerring(supabase, gameId, seat.id))}
+								title="The Fortune Teller reads this seat as the Demon even though they aren't — only one seat can hold it"
+							>
+								🐟 Make red herring
+							</button>
+						{/if}
 						<select
 							value={session.roleFor(seat.id) ?? ''}
 							onchange={(e) =>
@@ -391,6 +466,126 @@
 		{:else if tab === 'night'}
 			<section class="stack">
 				<NightDispatch {session} {gameId} />
+			</section>
+		{:else if tab === 'vote'}
+			<section class="stack">
+				{#if !openNom}
+					<section class="card stack">
+						<strong>Open a nomination</strong>
+						<p class="muted" style="margin:0">
+							Called out in person, entered here so everyone's phone can follow along. Only living
+							players can be nominated or nominate; only one nomination is open at a time.
+						</p>
+						<div>
+							<label for="nominee">Nominated</label>
+							<select id="nominee" bind:value={nomineeSeatId}>
+								<option value="">— pick a seat —</option>
+								{#each livingClaimed as s (s.id)}
+									<option value={s.id}>{s.name || `Seat ${s.seat_index + 1}`}</option>
+								{/each}
+							</select>
+						</div>
+						<div>
+							<label for="nominator">Nominated by (optional)</label>
+							<select id="nominator" bind:value={nominatorSeatId}>
+								<option value="">— unspecified —</option>
+								{#each livingClaimed as s (s.id)}
+									<option value={s.id}>{s.name || `Seat ${s.seat_index + 1}`}</option>
+								{/each}
+							</select>
+						</div>
+						<div style="width:8rem">
+							<label for="debate">Debate seconds</label>
+							<input id="debate" type="number" min="0" max="900" bind:value={debateSeconds} />
+						</div>
+						<button class="primary" disabled={!nomineeSeatId} onclick={doOpenNomination}>
+							Open nomination
+						</button>
+					</section>
+				{:else if openNom.stage === 'debate'}
+					<section class="card stack">
+						<strong>Debate</strong>
+						<p style="margin:0">
+							<strong>{seatLabel(openNom.nominee_seat_id)}</strong> has been nominated
+							{#if openNom.nominator_seat_id}
+								by <strong>{seatLabel(openNom.nominator_seat_id)}</strong>
+							{/if}.
+						</p>
+						{#if openNom.debate_seconds}
+							<p class="muted" style="margin:0">
+								{openNom.debate_seconds}s for the accuser's case and the defence, however you split
+								it — nothing here times it automatically.
+							</p>
+						{/if}
+						<div class="row">
+							<button class="primary" onclick={() => run(startVoting(supabase, openNom.id))}>
+								Start voting
+							</button>
+							<button onclick={() => run(dismissNomination(supabase, openNom.id))}>
+								Dismiss nomination
+							</button>
+						</div>
+					</section>
+				{:else if openNom.stage === 'voting'}
+					<section class="card stack">
+						<strong>Voting — {seatLabel(openNom.nominee_seat_id)}</strong>
+						<p style="margin:0">
+							<strong>{latestVotes.length}</strong> hand{latestVotes.length === 1 ? '' : 's'} raised
+							· needs <strong>{votes.votesToExecute}</strong> to execute
+						</p>
+						<div class="stack" style="gap:0.2rem">
+							{#each latestVotes as v (v.seat_id)}
+								<span style="font-size:0.85rem">
+									{v.is_ghost ? '👻' : '✋'} {seatLabel(v.seat_id)}
+								</span>
+							{:else}
+								<span class="muted" style="font-size:0.85rem">No hands raised yet.</span>
+							{/each}
+						</div>
+						<button class="primary" onclick={() => run(closeNomination(supabase, openNom.id))}>
+							Close vote
+						</button>
+					</section>
+				{/if}
+
+				{#if latestNom && latestNom.stage === 'closed' && (!openNom || openNom.id !== latestNom.id)}
+					{@const reachedMajority = latestVotes.length >= votes.votesToExecute}
+					<section class="card stack">
+						<strong>Result — {seatLabel(latestNom.nominee_seat_id)}</strong>
+						<p style="margin:0">
+							{latestVotes.length} vote{latestVotes.length === 1 ? '' : 's'}
+							{reachedMajority ? '— reached majority' : `— short of the ${votes.votesToExecute} needed`}
+						</p>
+						{#if latestNom.executed}
+							<p class="muted" style="margin:0">Executed.</p>
+						{:else if reachedMajority}
+							<p class="muted" style="margin:0">
+								Traditionally: count down 3, 2, 1 out loud, then tap Execute.
+							</p>
+							<button class="danger" onclick={executeNominee}>Execute {seatLabel(latestNom.nominee_seat_id)}</button>
+						{:else}
+							<p class="muted" style="margin:0">No execution today from this nomination.</p>
+						{/if}
+					</section>
+				{/if}
+
+				{#if todaysNominations.length}
+					<section class="card stack">
+						<strong>Today's nominations</strong>
+						{#each todaysNominations as n (n.id)}
+							<div class="row" style="justify-content:space-between;font-size:0.85rem">
+								<span>{seatLabel(n.nominee_seat_id)}</span>
+								<span class="muted">
+									{n.stage === 'closed'
+										? n.executed
+											? 'executed'
+											: 'not executed'
+										: n.stage}
+								</span>
+							</div>
+						{/each}
+					</section>
+				{/if}
 			</section>
 		{:else}
 			<section class="stack">

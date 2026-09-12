@@ -131,6 +131,35 @@ export interface MeetRequestRow {
 	created_at: string;
 }
 
+export type NominationStage = 'debate' | 'voting' | 'closed';
+
+/** One nomination's accusation/defense/vote cycle — see nominations table
+ * and the RPCs in db/schema.sql (open_nomination, start_voting,
+ * close_nomination). Only one is ever open (stage <> 'closed') per game. */
+export interface NominationRow {
+	id: string;
+	game_id: string;
+	cycle: number;
+	nominee_seat_id: string;
+	nominator_seat_id: string | null;
+	stage: NominationStage;
+	debate_seconds: number | null;
+	debate_started_at: string;
+	voting_started_at: string | null;
+	resolved_at: string | null;
+	executed: boolean;
+	created_at: string;
+}
+
+/** A raised hand on a nomination — presence of the row is the "yes" vote,
+ * there's no explicit "no". Written only via cast_vote()/retract_vote(). */
+export interface VoteRow {
+	nomination_id: string;
+	seat_id: string;
+	is_ghost: boolean;
+	created_at: string;
+}
+
 export interface DayLogRow {
 	id: string;
 	game_id: string;

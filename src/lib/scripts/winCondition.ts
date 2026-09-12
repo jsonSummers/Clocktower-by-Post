@@ -24,10 +24,9 @@ export interface WinState {
  *   - Good wins once no living seat holds a Demon-team character.
  *   - Evil wins once only two seated players are left alive.
  * This deliberately does not know about script-specific extra conditions
- * (e.g. "evil also wins if the Saint is executed") — those stay a Storyteller
- * call, same as nominations and votes, which the app doesn't run either.
- * Nothing here writes to the database or ends the game on its own; it's a
- * read-only check for the Storyteller's screen to surface.
+ * (e.g. "evil also wins if the Saint is executed") — those stay a
+ * Storyteller call. Nothing here writes to the database or ends the game on
+ * its own; it's a read-only check for the Storyteller's screen to surface.
  */
 export function checkWinCondition(
 	seats: SeatRow[],

@@ -14,6 +14,8 @@
 
 -- ---- clean slate ----------------------------------------------------------
 drop table if exists player_notes    cascade;
+drop table if exists votes           cascade;
+drop table if exists nominations     cascade;
 drop table if exists day_log         cascade;
 drop table if exists meet_requests   cascade;
 drop table if exists prep_notes      cascade;
@@ -39,6 +41,11 @@ drop function if exists kick_seat(uuid)    cascade;
 drop function if exists move_seat(uuid, text) cascade;
 drop function if exists set_my_name(uuid, text) cascade;
 drop function if exists touch_updated_at()   cascade;
+drop function if exists open_nomination(uuid, uuid, uuid, int) cascade;
+drop function if exists start_voting(uuid)   cascade;
+drop function if exists cast_vote(uuid)      cascade;
+drop function if exists retract_vote(uuid)   cascade;
+drop function if exists close_nomination(uuid) cascade;
 
 -- ---- tables --------------------------------------------------------------
 
@@ -146,6 +153,41 @@ create table player_notes (
 	body                   text not null default '',
 	prime_suspect_seat_id  uuid references seats(id) on delete set null,
 	updated_at             timestamptz not null default now()
+);
+
+-- Nominations: the day-phase accusation/defense/vote cycle. Only one may be
+-- open (stage <> 'closed') per game at a time, and a seat may only be
+-- nominated once per cycle (day) -- both enforced by open_nomination() below,
+-- not by a table constraint, so the Storyteller gets a clear error instead of
+-- a silent RLS rejection.
+create table nominations (
+	id                     uuid primary key default gen_random_uuid(),
+	game_id                uuid not null references games(id) on delete cascade,
+	cycle                  int  not null,
+	nominee_seat_id        uuid not null references seats(id) on delete cascade,
+	nominator_seat_id      uuid references seats(id) on delete set null,
+	stage                  text not null default 'debate'
+	                         check (stage in ('debate','voting','closed')),
+	debate_seconds         int,
+	debate_started_at      timestamptz not null default now(),
+	voting_started_at      timestamptz,
+	resolved_at            timestamptz,
+	executed               boolean not null default false,
+	created_at             timestamptz not null default now()
+);
+create index nominations_game_idx on nominations(game_id, cycle);
+
+-- Votes: one row per seat that has raised its hand on a nomination. A row's
+-- mere presence IS the "yes" -- there's no explicit "no" vote, exactly like
+-- the physical game (not raising your hand is a no). Written only through
+-- cast_vote()/retract_vote() below, never directly by a player, so a dead
+-- seat's one remaining ghost vote can't be spent by hand-editing the row.
+create table votes (
+	nomination_id          uuid not null references nominations(id) on delete cascade,
+	seat_id                uuid not null references seats(id) on delete cascade,
+	is_ghost               boolean not null default false,
+	created_at             timestamptz not null default now(),
+	primary key (nomination_id, seat_id)
 );
 
 -- ---- helper functions (SECURITY DEFINER to avoid RLS recursion) ----------
@@ -415,6 +457,152 @@ language sql set search_path = public as $$
 	where id = p_game_id;
 $$;
 
+-- ---- nominations / voting -----------------------------------------------
+-- Mirrors the official day-phase flow: discuss, nominate, debate, vote, and
+-- (the Storyteller's call) execute. Kept deliberately simple: official rules
+-- actually hold every execution open until the end of the day and only carry
+-- out the single highest-voted nomination that cleared majority (a tie among
+-- the leaders means no one dies) -- this app resolves each nomination as it
+-- closes instead of comparing across the whole day, leaving that judgment
+-- call to the Storyteller. See docs/decisions.md.
+
+-- Storyteller opens a nomination: only one open at a time per game, and each
+-- seat can only be nominated once per day (cycle).
+create function open_nomination(
+	p_game_id uuid,
+	p_nominee_seat_id uuid,
+	p_nominator_seat_id uuid default null,
+	p_debate_seconds int default null
+)
+returns nominations
+language plpgsql security definer set search_path = public as $$
+declare
+	v_cycle int;
+	v_row   nominations;
+begin
+	if not is_storyteller(p_game_id) then
+		raise exception 'not the storyteller';
+	end if;
+	select phase_cycle into v_cycle from games where id = p_game_id;
+	if exists (
+		select 1 from nominations where game_id = p_game_id and stage <> 'closed'
+	) then
+		raise exception 'a nomination is already open for this game';
+	end if;
+	if exists (
+		select 1 from nominations
+		where game_id = p_game_id and cycle = v_cycle and nominee_seat_id = p_nominee_seat_id
+	) then
+		raise exception 'this seat has already been nominated today';
+	end if;
+
+	insert into nominations (game_id, cycle, nominee_seat_id, nominator_seat_id, debate_seconds)
+	values (p_game_id, v_cycle, p_nominee_seat_id, p_nominator_seat_id, p_debate_seconds)
+	returning * into v_row;
+
+	insert into day_log (game_id, cycle, kind, payload)
+	values (
+		p_game_id, v_cycle, 'nomination',
+		jsonb_build_object(
+			'nomination_id', v_row.id,
+			'nominee_seat_id', p_nominee_seat_id,
+			'nominator_seat_id', p_nominator_seat_id
+		)
+	);
+
+	return v_row;
+end;
+$$;
+
+-- Storyteller moves a nomination from debate into voting.
+create function start_voting(p_nomination_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+	v_game_id uuid;
+begin
+	select game_id into v_game_id from nominations where id = p_nomination_id;
+	if v_game_id is null or not is_storyteller(v_game_id) then
+		raise exception 'not allowed';
+	end if;
+	update nominations set stage = 'voting', voting_started_at = now()
+	where id = p_nomination_id and stage = 'debate';
+end;
+$$;
+
+-- A seat raises its hand on the open vote. A dead seat may only do this while
+-- its ghost vote is unspent; which seat is voting comes from auth.uid(), not
+-- a client-supplied id, so a device can only ever cast its own seat's vote.
+create function cast_vote(p_nomination_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+	v_nom  nominations;
+	v_seat seats;
+begin
+	select * into v_nom from nominations where id = p_nomination_id;
+	if v_nom.id is null or v_nom.stage <> 'voting' then
+		raise exception 'voting is not open';
+	end if;
+	select * into v_seat from seats where game_id = v_nom.game_id and user_id = auth.uid();
+	if v_seat.id is null then
+		raise exception 'you are not seated in this game';
+	end if;
+	if not v_seat.alive and not v_seat.ghost_vote_available then
+		raise exception 'no ghost vote remaining';
+	end if;
+	insert into votes (nomination_id, seat_id, is_ghost)
+	values (p_nomination_id, v_seat.id, not v_seat.alive)
+	on conflict (nomination_id, seat_id) do nothing;
+end;
+$$;
+
+-- Lower your hand again before the vote closes.
+create function retract_vote(p_nomination_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+	v_seat_id uuid;
+begin
+	select s.id into v_seat_id
+	from seats s join nominations n on n.game_id = s.game_id
+	where n.id = p_nomination_id and s.user_id = auth.uid() and n.stage = 'voting';
+	if v_seat_id is not null then
+		delete from votes where nomination_id = p_nomination_id and seat_id = v_seat_id;
+	end if;
+end;
+$$;
+
+-- Storyteller closes the vote: locks the tally, and permanently spends the
+-- ghost vote of any dead seat that raised its hand (win or lose -- using it
+-- at all is what spends it). Whether to actually execute the nominee is a
+-- separate call the Storyteller's screen makes with the existing
+-- setSeatAlive() action, not this function -- see the comment above about
+-- the official end-of-day comparison this app doesn't automate.
+create function close_nomination(p_nomination_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+	v_game_id uuid;
+begin
+	select game_id into v_game_id from nominations where id = p_nomination_id;
+	if v_game_id is null or not is_storyteller(v_game_id) then
+		raise exception 'not allowed';
+	end if;
+	update nominations set stage = 'closed', resolved_at = now() where id = p_nomination_id;
+	update seats set ghost_vote_available = false
+	where id in (
+		select seat_id from votes where nomination_id = p_nomination_id and is_ghost
+	);
+	insert into day_log (game_id, cycle, kind, payload)
+	select game_id, cycle, 'vote', jsonb_build_object(
+		'nomination_id', id,
+		'votes', (select count(*) from votes where nomination_id = p_nomination_id)
+	)
+	from nominations where id = p_nomination_id;
+end;
+$$;
+
 -- ---- row-level security ------------------------------------------------
 
 alter table games         enable row level security;
@@ -464,10 +652,19 @@ create policy night_actions_select on night_actions for select
 	using ( is_storyteller(game_id) or (owns_seat(seat_id) and released_at is not null) );
 create policy night_actions_insert on night_actions for insert
 	with check ( is_storyteller(game_id) );
+-- The with check clause matters here, not just using: without one, Postgres
+-- reuses the using expression to validate the NEW row too, which would
+-- require the post-update result to *still* be null -- i.e. a player could
+-- never actually set it, and submitNightChoice()/answering a prompt would
+-- silently fail. with check only re-requires ownership, not an unchanged
+-- result, so the player's one write through.
 create policy night_actions_update on night_actions for update
 	using (
 		is_storyteller(game_id)
 		or (owns_seat(seat_id) and released_at is not null and result is null)
+	)
+	with check (
+		is_storyteller(game_id) or owns_seat(seat_id)
 	);
 create policy night_actions_delete on night_actions for delete
 	using ( is_storyteller(game_id) );
@@ -495,6 +692,28 @@ create policy day_log_write on day_log for all
 create policy player_notes_all on player_notes for all
 	using ( owns_seat(seat_id) ) with check ( owns_seat(seat_id) );
 
+-- nominations: participants read (everyone should see what's being decided);
+-- the storyteller can write the table directly too (dismiss/undo a mistake),
+-- but the day-to-day open/advance/close flow goes through the RPCs above,
+-- which apply the once-per-day and one-open-at-a-time rules a raw insert
+-- policy wouldn't.
+create policy nominations_select on nominations for select using ( in_game(game_id) );
+create policy nominations_insert on nominations for insert with check ( is_storyteller(game_id) );
+create policy nominations_update on nominations for update using ( is_storyteller(game_id) );
+create policy nominations_delete on nominations for delete using ( is_storyteller(game_id) );
+
+-- votes: everyone in the game can see who's raised a hand — voting is public
+-- in the physical game too. No policy grants a player their own insert here
+-- on purpose: writes go through cast_vote()/retract_vote() (SECURITY
+-- DEFINER, so they bypass RLS), which is what actually enforces "only your
+-- own seat" and the ghost-vote check. The storyteller can still write
+-- directly, same override every other table gives them.
+create policy votes_select on votes for select
+	using ( exists (select 1 from nominations n where n.id = nomination_id and in_game(n.game_id)) );
+create policy votes_storyteller_write on votes for all
+	using ( exists (select 1 from nominations n where n.id = nomination_id and is_storyteller(n.game_id)) )
+	with check ( exists (select 1 from nominations n where n.id = nomination_id and is_storyteller(n.game_id)) );
+
 -- ---- realtime ---------------------------------------------------------
 -- Push changes on these tables to subscribed devices. RLS still applies, so
 -- each device only receives rows it is allowed to see.
@@ -505,3 +724,5 @@ alter publication supabase_realtime add table night_actions;
 alter publication supabase_realtime add table meet_requests;
 alter publication supabase_realtime add table day_log;
 alter publication supabase_realtime add table grimoire;
+alter publication supabase_realtime add table nominations;
+alter publication supabase_realtime add table votes;
