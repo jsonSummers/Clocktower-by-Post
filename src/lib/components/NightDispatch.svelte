@@ -56,16 +56,35 @@
 	}
 
 	const script = $derived(session.game ? getScript(session.game.script_id) : undefined);
-	const actualNight = $derived(session.phase?.kind === 'night' ? session.phase.cycle : null);
+	/** The night this panel dispatches for. Stays on last night's number
+	 * through the FOLLOWING day too (same phase_cycle — see clock.ts'
+	 * night N -> day N), not just while phase_kind is literally 'night' —
+	 * otherwise anything not yet sent (a Ravenkeeper prompt surfaced by a
+	 * kill the Storyteller only marked dead a moment before advancing, say)
+	 * became permanently unreachable the instant the clock moved to day.
+	 * Once the NEXT night starts, this rolls forward and that window closes. */
+	const actualNight = $derived(
+		session.phase?.kind === 'night' || session.phase?.kind === 'day'
+			? session.phase.cycle
+			: null
+	);
 	const night = $derived(previewNight ?? actualNight);
 	/** False when previewing a night other than the one the game clock is
 	 * really on — the panel becomes read-only reference in that case. */
 	const live = $derived(previewNight == null || previewNight === actualNight);
-	const steps = $derived(
-		script && night != null
-			? wakeOrder(script, session.seats, (id) => session.roleFor(id), night)
-			: []
-	);
+	const steps = $derived.by(() => {
+		if (!script || night == null) return [];
+		const raw = wakeOrder(script, session.seats, (id) => session.roleFor(id), night);
+		// A wakeIfDead character (Ravenkeeper) is otherwise eligible on every
+		// night once dead — cut it off after the first night it actually got
+		// a chance to act, so it doesn't keep re-asking on every later night.
+		return raw.filter((step) => {
+			if (!step.character.wakeIfDead) return true;
+			return !session.nightActions.some(
+				(a) => a.seat_id === step.seat.id && a.character_id === step.character.id && a.night < night
+			);
+		});
+	});
 
 	/** Night 1 only: characterId -> the ready-worded evil-team-recognition text
 	 * (Demon learns Minions + bluffs; Minions learn the Demon and each other). */
@@ -99,6 +118,12 @@
 		const c = script && cid ? getCharacter(script, cid) : undefined;
 		return c?.team === 'demon';
 	}
+	/** True when this seat's displayed character is a cover story for the
+	 * Drunk — the seat itself has no idea, but the Storyteller needs the
+	 * reminder that anything "learned" here doesn't have to be true. */
+	function isDrunkSeat(seatId: string): boolean {
+		return session.grimoire.find((g) => g.seat_id === seatId)?.real_character_id === 'drunk';
+	}
 
 	function actionFor(seatId: string) {
 		// Preview mode never reflects real dispatch state — it's a reference
@@ -119,20 +144,9 @@
 		if (!script || night == null) return [];
 		const character = script.characters.find((c) => c.id === characterId);
 		if (!character) return [];
-		if (night === 1) {
-			const reveal = evilRevealText(characterId);
-			if (reveal && isRevealOnly(character)) {
-				return [
-					{
-						label: 'Night 1 reveal',
-						text: reveal,
-						rationale:
-							'Automatic evil-team recognition — the Demon learns its Minions (+ bluffs); Minions learn the Demon and each other.',
-						truthful: true
-					}
-				];
-			}
-		}
+		// Night 1 reveal-only characters (Imp, Spy, ...) get their own dedicated
+		// send button in the template and never reach this function via an
+		// info-preplan/info-auto branch — nothing to special-case here anymore.
 		const ctx = {
 			script,
 			seats: session.seats,
@@ -217,9 +231,36 @@
 					</span>
 				</div>
 
-				{#if kind === 'grimoire' && !revealOnly}
+				{#if isDrunkSeat(step.seat.id)}
+					<p class="drunk-warning">
+						🍺 This seat is actually the Drunk, shown as the {step.character.name} — their ability
+						doesn't really work. Anything sent here doesn't need to be true.
+					</p>
+				{/if}
+
+				{#if revealOnly}
+					<!-- Night 1 evil-team recognition IS the whole message for this
+					     character (Imp/demon; Spy/grimoire; Scarlet Woman & Baron/none) —
+					     a dedicated one-click send rather than routing it through the
+					     generic info-candidate box below, so it can't be missed or
+					     mistaken for something that needs composing. -->
+					<p class="revealbox">{reveal}</p>
+					{#if !live}
+						<p class="muted hint" style="margin:0">Preview only — switch to the real night to send.</p>
+					{:else if action?.released_at}
+						<p class="muted" style="margin:0">Sent.</p>
+					{:else}
+						<button
+							class="primary"
+							onclick={() =>
+								run(sendNightInfo(session.client, gameId, night!, step.seat.id, step.character.id, '', reveal!))}
+						>
+							Send Night 1 reveal to {step.seat.name || 'them'}
+						</button>
+					{/if}
+				{:else if kind === 'grimoire'}
 					<p class="muted" style="margin:0">Sees the full grimoire — nothing to send here.</p>
-				{:else if kind === 'choose' && !revealOnly}
+				{:else if kind === 'choose'}
 					{#if step.character.prompt.kind === 'choose'}
 						{@const alive = session.seats.filter((s) => s.alive)}
 						{@const pool = step.character.prompt.canPickSelf
@@ -448,6 +489,14 @@
 		border: 1px solid var(--ok);
 		border-radius: 8px;
 		padding: 0.55rem 0.7rem;
+	}
+	.drunk-warning {
+		margin: 0;
+		font-size: 0.82rem;
+		background: var(--surface-2);
+		border: 1px dashed var(--accent);
+		border-radius: 8px;
+		padding: 0.5rem 0.7rem;
 	}
 	.preview-cand {
 		display: flex;

@@ -2,6 +2,75 @@
 
 Short records of choices that would otherwise be hard to reconstruct. Newest first.
 
+## 2026-09-11c — Drunk mechanics, death-triggered night prompts, Night 1 reveal reliability, clickable circle
+
+Four more fixes from a further live-testing pass: "when someone is given
+drunk, they are not told this... have to play not knowing their information
+or abilities are faulty", "the ravenkeeper was killed by the imp, the
+ravenkeeper did not get a prompt", "the imp [should be] given bluffs and
+told who the minion is... I think this didn't work", and "many people
+trying to click on the player position circle... at least the ST should be
+able to click on it".
+
+- **Drunk implemented properly** (previously just a character definition
+  with `prompt: {kind:'none'}` — nothing dealt it a fake identity, nothing
+  read `grimoire.real_character_id`, which existed in the schema/types but
+  was dead code). `dealGame()` (`src/lib/scripts/deal.ts`) now detects when
+  `'drunk'` is drawn into the Outsider slate and swaps that seat's
+  `assignments` entry to a random Townsfolk NOT otherwise in play (falls
+  back to an in-play one only if the script has none spare) — the seat's own
+  `seat_roles` row, and therefore everything downstream (role card, night
+  prompts, wake order) is the FAKE identity; the true `'drunk'` only ever
+  reaches `grimoire.real_character_id`, which is Storyteller-only per
+  existing RLS. `applyDeal()` writes it and clears any stale value on redeal
+  (same pattern as the red herring). For manual assignment, `'drunk'` is
+  deliberately removed from the per-seat character dropdown on the host page
+  (picking it there would set `seat_roles` straight to `'drunk'` and
+  instantly leak the truth) — a dedicated "🍺 Make Drunk" button does the
+  same fake-identity-plus-grimoire-marker dance, with a "Clear" to undo and
+  a small ST-only tag showing the cover story. `NightDispatch.svelte` shows
+  a warning banner on a Drunk seat's step ("their ability doesn't really
+  work... doesn't need to be true") so the Storyteller isn't misled by their
+  own auto-computed suggestions.
+- **Death-triggered prompts (Ravenkeeper) fixed — two real bugs.** First,
+  `wakeOrder()` had no gate on the character actually being dead: Ravenkeeper
+  ("if they die at night...") was appearing in the wake queue on every
+  night once dealt, dead or not, and would keep re-appearing every night
+  after death too. Added `wakeIfDead` on `Character` (set on ravenkeeper in
+  `trouble-brewing.ts`); `wakeOrder()` now only includes such a character
+  once `!seat.alive`, and `NightDispatch.svelte` additionally suppresses it
+  once a night_actions row from an earlier night already exists for that
+  seat+character (so it fires exactly once, the first opportunity after
+  death). Second — the one actually matching the reported symptom — the
+  panel's `actualNight` was tied strictly to `phase_kind === 'night'`, so
+  advancing to Day (which shares the same `phase_cycle` as the night that
+  just ended, per clock.ts' `night N -> day N`) made any not-yet-sent prompt
+  for that night permanently unreachable, including a Ravenkeeper
+  opportunity that only existed because the kill was marked moments before
+  advancing. `actualNight` now also holds during the immediately following
+  Day of the same cycle, closing only once the next Night starts.
+- **Night 1 evil-team reveal (Imp bluffs, Spy/Baron/Scarlet Woman "you are
+  Evil") made impossible to miss.** The underlying data
+  (`night1EvilReveals()`, added last session) was working, but the UI routed
+  a "reveal-only" character (Imp, Spy, and any team-minion character with no
+  real night action) through the generic info-candidate box: the reveal
+  appeared as a clickable "Night 1 reveal" candidate that only populated a
+  textarea, requiring a second "Send" click many Storytellers would not
+  expect for what looks like a fixed announcement rather than composable
+  info. `NightDispatch.svelte`'s branch order now checks `revealOnly` first
+  and renders it as a dedicated read-only box with one button — "Send Night
+  1 reveal to {seat}" — mirroring the one-click pattern already used for
+  Fortune Teller's/Ravenkeeper's reveals.
+- **Storyteller's circle is now click-to-jump.** `Circle.svelte` already
+  supported an `onselect` prop (used nowhere on the host page); wiring it up
+  on the Seats tab makes tapping a seat scroll its row into view below and
+  briefly highlight it — addresses reports of people trying to click seats
+  on the circle expecting a reaction. Left deliberately NOT interactive on a
+  player's own circle (`PlayerView.svelte` unchanged) — it was "originally
+  meant simply as info" per the design brief, and making it clickable there
+  risks reading as a way to inspect other players, which isn't part of the
+  game's information model.
+
 ## 2026-09-11b — realtime self-healing, win-condition/voting helpers, gothic portrait grade
 
 Four fixes/features from the same round of live testing, in response to:

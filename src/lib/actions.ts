@@ -43,12 +43,30 @@ export function setGrimoireNote(c: SupabaseClient, gameId: string, seatId: strin
 	return c.from('grimoire').upsert({ seat_id: seatId, game_id: gameId, notes });
 }
 
+/** Storyteller marks a seat as secretly the Drunk: `fakeCharacterId` is what
+ * that seat's own screen and everyone else's continues to show (the caller
+ * is responsible for actually assigning it via `assignRole` — this only
+ * records the true identity, which `grimoire` RLS keeps Storyteller-only). */
+export function setDrunk(c: SupabaseClient, gameId: string, seatId: string) {
+	return c
+		.from('grimoire')
+		.upsert({ seat_id: seatId, game_id: gameId, real_character_id: 'drunk' }, { onConflict: 'seat_id' });
+}
+
+/** Storyteller undoes setDrunk — the seat's displayed character stays
+ * whatever it currently is (a separate assignRole call to actually change it
+ * back is the caller's choice, not this one's). */
+export function clearDrunk(c: SupabaseClient, seatId: string) {
+	return c.from('grimoire').update({ real_character_id: null }).eq('seat_id', seatId);
+}
+
 /**
  * Writes a dealGame() result to the database: replaces every seat_roles row
- * for the game, clears any previous red herring and sets the new one,
- * records the composition actually used (accounting for Baron's swing if it
- * was drawn), and clears night_actions so a redeal starts night info fresh.
- * Storyteller-only, per the same RLS every other write here relies on.
+ * for the game, clears any previous red herring and Drunk marker and sets
+ * the new ones, records the composition actually used (accounting for
+ * Baron's swing if it was drawn), and clears night_actions so a redeal
+ * starts night info fresh. Storyteller-only, per the same RLS every other
+ * write here relies on.
  */
 export async function applyDeal(c: SupabaseClient, gameId: string, result: DealResult) {
 	const { error: clearRolesErr } = await c.from('seat_roles').delete().eq('game_id', gameId);
@@ -56,7 +74,7 @@ export async function applyDeal(c: SupabaseClient, gameId: string, result: DealR
 
 	const { error: clearHerringErr } = await c
 		.from('grimoire')
-		.update({ is_red_herring: false })
+		.update({ is_red_herring: false, real_character_id: null })
 		.eq('game_id', gameId);
 	if (clearHerringErr) return { error: clearHerringErr };
 
@@ -80,6 +98,11 @@ export async function applyDeal(c: SupabaseClient, gameId: string, result: DealR
 				{ seat_id: result.redHerringSeatId, game_id: gameId, is_red_herring: true },
 				{ onConflict: 'seat_id' }
 			);
+		if (error) return { error };
+	}
+
+	if (result.drunk) {
+		const { error } = await setDrunk(c, gameId, result.drunk.seatId);
 		if (error) return { error };
 	}
 

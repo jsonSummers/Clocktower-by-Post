@@ -26,6 +26,11 @@ export interface Character {
 	daySide?: boolean;
 	/** Gets a red herring assigned at deal time (Fortune Teller). */
 	redHerring?: boolean;
+	/** Extra gate on top of firstNight/otherNight: this character's wake step
+	 * only appears once the seat is actually dead (Ravenkeeper — "if you die
+	 * at night"), and only once (not repeated on every later night). See
+	 * wakeOrder() in nightInfo.ts and the filtering in NightDispatch.svelte. */
+	wakeIfDead?: boolean;
 }
 
 export type NightPrompt =

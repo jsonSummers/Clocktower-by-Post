@@ -15,6 +15,8 @@
 		setSeatName,
 		setSeatAlive,
 		setGhostVoteAvailable,
+		setDrunk,
+		clearDrunk,
 		resolveMeet,
 		moveSeat,
 		kickSeat
@@ -68,10 +70,16 @@
 	}
 
 	const TEAM_ORDER: Team[] = ['townsfolk', 'outsider', 'minion', 'demon', 'traveller', 'fabled'];
+	// 'drunk' is deliberately left out of the assignable dropdown: picking it
+	// there would set seat_roles directly to 'drunk', which is exactly what
+	// that seat's own screen reads to show its role — instantly telling the
+	// player the truth. Use "Make Drunk" on the seat row instead, which
+	// assigns a fake Townsfolk and records the real identity separately in
+	// grimoire (Storyteller-only).
 	const byTeam = $derived(
 		TEAM_ORDER.map((t) => ({
 			team: t,
-			chars: (script?.characters ?? []).filter((c) => c.team === t)
+			chars: (script?.characters ?? []).filter((c) => c.team === t && c.id !== 'drunk')
 		})).filter((g) => g.chars.length)
 	);
 
@@ -79,6 +87,25 @@
 		const id = session.roleFor(seatId);
 		if (!id || !script) return null;
 		return script.characters.find((c) => c.id === id)?.name ?? id;
+	}
+
+	function isDrunk(seatId: string): boolean {
+		return session.grimoire.find((g) => g.seat_id === seatId)?.real_character_id === 'drunk';
+	}
+
+	/** Assigns a random not-in-play Townsfolk as this seat's cover story and
+	 * records the true identity via setDrunk — same "not otherwise in play"
+	 * rule dealGame() uses for an auto-dealt Drunk. */
+	async function makeDrunk(seatId: string) {
+		if (!script) return;
+		const inPlayIds = new Set(session.roles.map((r) => r.character_id));
+		const townsfolk = script.characters.filter((c) => c.team === 'townsfolk');
+		const notInPlay = townsfolk.filter((c) => !inPlayIds.has(c.id));
+		const pool = notInPlay.length ? notInPlay : townsfolk;
+		if (!pool.length) return;
+		const fake = pool[Math.floor(Math.random() * pool.length)];
+		await run(assignRole(supabase, gameId, seatId, fake.id));
+		await run(setDrunk(supabase, gameId, seatId));
 	}
 
 	async function run(p: PromiseLike<{ error: unknown }>) {
@@ -119,12 +146,32 @@
 		if (error) {
 			dealMsg = 'Deal failed: ' + (error instanceof Error ? error.message : String(error));
 		} else {
-			const { comp, redHerringSeatId } = result;
+			const { comp, redHerringSeatId, drunk } = result;
+			const drunkChar = drunk ? script.characters.find((c) => c.id === drunk.fakeCharacterId) : null;
 			dealMsg =
 				`Dealt ${result.assignments.size} roles — ${comp.townsfolk} Townsfolk / ${comp.outsider} Outsider / ${comp.minion} Minion / ${comp.demon} Demon` +
-				(redHerringSeatId ? ' · Fortune Teller red herring set.' : '.');
+				(redHerringSeatId ? ' · Fortune Teller red herring set.' : '.') +
+				(drunkChar ? ` · Drunk is shown as the ${drunkChar.name}.` : '');
 		}
 		dealing = false;
+	}
+
+	let highlightSeatId = $state<string | null>(null);
+	let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+	/** The Storyteller's circle is click-to-jump: tapping a seat scrolls its
+	 * row into view below and briefly highlights it, rather than doing
+	 * nothing — several people found themselves trying to click the circle
+	 * expecting *some* reaction to it. */
+	function jumpToSeat(seatId: string) {
+		tab = 'seats';
+		highlightSeatId = seatId;
+		if (highlightTimer) clearTimeout(highlightTimer);
+		highlightTimer = setTimeout(() => (highlightSeatId = null), 2000);
+		// Wait a tick for the Seats tab (and its seat rows) to actually render
+		// before trying to scroll to one.
+		setTimeout(() => {
+			document.getElementById(`seat-row-${seatId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		}, 30);
 	}
 
 	function clickKick(seatId: string) {
@@ -217,7 +264,8 @@
 			</section>
 		{:else if tab === 'seats'}
 			<section class="card">
-				<Circle seats={session.seats} labelFor={(s) => roleName(s.id)} />
+				<Circle seats={session.seats} labelFor={(s) => roleName(s.id)} onselect={jumpToSeat} />
+				<p class="muted" style="text-align:center;margin:0.4rem 0 0">Tap a seat to jump to it below.</p>
 			</section>
 			<section class="card stack">
 				<div class="row" style="justify-content:space-between;align-items:center">
@@ -247,7 +295,12 @@
 			</section>
 			<section class="stack">
 				{#each session.seats as seat, i (seat.id)}
-					<div class="card seatrow" class:open={!seat.user_id}>
+					<div
+						id="seat-row-{seat.id}"
+						class="card seatrow"
+						class:open={!seat.user_id}
+						class:justclicked={highlightSeatId === seat.id}
+					>
 						<div class="row" style="align-items:center;flex-wrap:nowrap">
 							<span class="ix">{seat.seat_index + 1}</span>
 							<Avatar characterId={session.roleFor(seat.id)} size="sm" />
@@ -271,6 +324,26 @@
 								title="Toggle whether this seat's ghost vote has been used"
 							>
 								Ghost vote: {seat.ghost_vote_available ? 'available' : 'used'}
+							</button>
+						{/if}
+						{#if isDrunk(seat.id)}
+							<div class="row" style="align-items:center;gap:0.4rem">
+								<span class="drunktag">🍺 Drunk — thinks they're the {roleName(seat.id)}</span>
+								<button
+									class="ghostvote"
+									onclick={() => run(clearDrunk(supabase, seat.id))}
+									title="Undo — this seat is no longer marked as the Drunk"
+								>
+									Clear
+								</button>
+							</div>
+						{:else}
+							<button
+								class="ghostvote"
+								onclick={() => makeDrunk(seat.id)}
+								title="Secretly assign the Drunk: gives them a random not-in-play Townsfolk to think they are"
+							>
+								🍺 Make Drunk
 							</button>
 						{/if}
 						<select
@@ -379,6 +452,15 @@
 	.seatrow.open {
 		opacity: 0.75;
 		border-style: dashed;
+	}
+	.seatrow.justclicked {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+		transition: box-shadow 0.3s ease, border-color 0.3s ease;
+	}
+	.drunktag {
+		font-size: 0.78rem;
+		color: var(--text-dim);
 	}
 	.seatrow .ix {
 		color: var(--text-dim);

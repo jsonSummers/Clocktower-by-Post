@@ -99,7 +99,8 @@ export const troubleBrewing: Script = {
 			summary: 'If they die at night, they pick a player and learn that player’s character.',
 			firstNight: null,
 			otherNight: 35,
-			prompt: { kind: 'choose', count: 1, canPickSelf: false }
+			prompt: { kind: 'choose', count: 1, canPickSelf: false },
+			wakeIfDead: true
 		},
 		{
 			id: 'virgin',

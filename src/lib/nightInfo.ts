@@ -455,10 +455,15 @@ export function wakeOrder(
 	for (const character of order) {
 		if (included.has(character.id)) continue;
 		const seat = bySeat.get(character.id);
-		if (seat) {
-			steps.push({ seat, character });
-			included.add(character.id);
-		}
+		if (!seat) continue;
+		// A wakeIfDead character (Ravenkeeper) only gets a step once it's
+		// actually dead -- "if you die at night, ..." isn't an ability they
+		// have while still alive. Which night, and whether it's already been
+		// used once, is filtered separately in NightDispatch.svelte (this
+		// function has no access to night_actions history).
+		if (character.wakeIfDead && seat.alive) continue;
+		steps.push({ seat, character });
+		included.add(character.id);
 	}
 	return steps;
 }
