@@ -35,6 +35,13 @@
 	--redstone-dim: #c98a78;
 	--lead: #4a3d29;
 	--gilt-glow: 245, 178, 90;
+	/* Warm firelight glow behind the candle overlay in Avatar.svelte --
+	 * an RGB triple (same convention as --gilt-glow) rather than reusing
+	 * that token, since --gilt-glow is a separate UI-highlight colour that
+	 * stays green under the lovecraft theme below, while this one needs to
+	 * go blue there for the black-wax/blue-flame candles. */
+	--candle-glow: 255, 150, 50;
+	--altar-tex: url('/textures/altar-brick.jpg');
 	--stone-tex: url('/textures/limestone.jpg');
 	--parchment-tex: url('/textures/parchment.jpg');
 	--wood-tex: url('/textures/oak.jpg');
@@ -70,6 +77,8 @@
 	--redstone-dim: #7a3a30;
 	--lead: #1a1712;
 	--gilt-glow: 255, 189, 110;
+	--candle-glow: 255, 170, 70;
+	--altar-tex: url('/textures/altar-brick-night.jpg');
 
 	/* The day textures above were being silently reused here too -- at
 	 * normal opacity the near-black night gradient on `body` just painted
@@ -80,6 +89,100 @@
 	 * re-tinted by CSS. */
 	--stone-tex: url('/textures/limestone-night.jpg');
 	--parchment-tex: url('/textures/parchment-night.jpg');
+
+	color-scheme: dark;
+}
+
+/*
+ * ---- Laissez un Faire: Victorian-occult "old leather book" ----
+ * A second, independent theme layer -- set as [data-script-theme] on
+ * <html> by src/lib/scriptTheme.ts's applyScriptTheme(), called from
+ * whichever screen currently knows the game's script_id (host/play/dev
+ * pages, and the create-game script picker for a live preview). Combines
+ * with the existing day/night [data-theme] toggle above rather than
+ * replacing it, so a Laissez un Faire game can still be played in a
+ * curtained study (day) or a candlelit ritual room after dark (night) --
+ * see the combined selector below. Trouble Brewing (and anything with no
+ * entry in scriptTheme.ts's SCRIPT_THEME map) never sets this attribute at
+ * all, so it keeps the plain gothic theme above with zero extra CSS cost.
+ *
+ * Second pass at this theme -- the first was a full brass/gearwork
+ * steampunk look (see make_steampunk_textures.py, still on disk but
+ * unused); Mickey steered it toward Lovecraftian the next day: "closer to
+ * being an old leather book, victorian era, maybe some small steampunk
+ * elements in the UI but largely lovecraftian cult iconography". Kept
+ * --accent/--ward-accent as a tarnished-brass color for exactly that "small
+ * steampunk element" -- everything else (leather, damask, ink, a sickly
+ * eldritch green for glows) is Victorian-occult.
+ *
+ * Textures via scripts/make_lovecraft_textures.py: old-leather.jpg (an
+ * embossed leather book-cover grain with a tooled-line border, the
+ * --parchment-tex analogue for .card) and warded-damask.jpg (a dark damask
+ * wallpaper with a faint repeating warding sigil, the --stone-tex analogue
+ * for the page background). Because .card and body already paint through
+ * the --parchment-tex/--stone-tex custom properties rather than hardcoded
+ * urls, redefining just those two tokens here is enough to reskin every
+ * card and the whole page background -- same trick the night-vigil theme
+ * above already relies on.
+ */
+:root[data-script-theme='lovecraft'] {
+	--bg: #3f211e;
+	--surface: #5a2e29;
+	--surface-2: #431f1c;
+	--text: #e8d9c0;
+	--text-dim: #b0967c;
+	--border: #7a4a3a;
+	--accent: #8a6a34;
+	--accent-bright: #c9a55a;
+	--on-accent: #1c1008;
+	--night: #4a6a56;
+	--danger: #9a3a2a;
+	--ok: #6ca87f;
+
+	--redstone: #7a2a22;
+	--redstone-dim: #a85a48;
+	--lead: #241614;
+	--gilt-glow: 108, 168, 132;
+	/* Mickey: "for the lovecraft script... alter the colour to be more
+	 * black eith a bluish flame" -- the candle glow goes blue here while
+	 * --gilt-glow (a separate, unrelated UI-highlight colour) stays green. */
+	--candle-glow: 70, 150, 255;
+	--altar-tex: url('/textures/altar-brick-lovecraft.jpg');
+	--stone-tex: url('/textures/warded-damask.jpg');
+	--parchment-tex: url('/textures/old-leather.jpg');
+
+	/* eldritch-frame-only tokens, read by Avatar.svelte's .lovecraft overlay */
+	--ward-accent: #9a7a44;
+	--ward-glow: #6ca87f;
+
+	color-scheme: light;
+}
+
+:root[data-script-theme='lovecraft'][data-theme='night'] {
+	--bg: #140b0a;
+	--surface: #201110;
+	--surface-2: #170b0a;
+	--text: #d8c8a8;
+	--text-dim: #8a7460;
+	--border: #3a201a;
+	--accent: #a88652;
+	--accent-bright: #d4ad66;
+	--on-accent: #140a04;
+	--night: #5a8068;
+	--danger: #b5453a;
+	--ok: #7fc496;
+
+	--redstone: #8a352a;
+	--redstone-dim: #5a2820;
+	--lead: #0e0807;
+	--gilt-glow: 130, 200, 156;
+	--candle-glow: 100, 180, 255;
+	--altar-tex: url('/textures/altar-brick-lovecraft-night.jpg');
+	--stone-tex: url('/textures/warded-damask-night.jpg');
+	--parchment-tex: url('/textures/old-leather-night.jpg');
+
+	--ward-accent: #b89760;
+	--ward-glow: #82c89c;
 
 	color-scheme: dark;
 }

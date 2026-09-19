@@ -8,6 +8,8 @@ import {
 	undertakerCandidates,
 	infoCandidatesFor,
 	choicePromptFor,
+	balloonistCandidates,
+	night1EvilReveals,
 	wakeOrder,
 	type NightContext
 } from './nightInfo';
@@ -50,7 +52,7 @@ describe('preplan candidates (washerwoman/librarian/investigator)', () => {
 
 	it('leans-good picks an evil decoy when one exists', () => {
 		const cands = washerwomanCandidates(ctxFor('s0'));
-		const leansGood = cands.find((c) => c.label === 'Leans good')!;
+		const leansGood = cands.find((c) => c.label === 'Helps good team')!;
 		const decoyId = leansGood.seatIds!.find((id) => roleOf(id) !== 'washerwoman' && getCharacter(troubleBrewing, roleOf(id)!)?.team !== 'townsfolk');
 		// decoy should be an evil seat (poisoner or imp), not a random good one, since evil decoys exist
 		const decoyTeam = decoyId ? getCharacter(troubleBrewing, roleOf(decoyId)!)?.team : undefined;
@@ -135,6 +137,18 @@ describe('choicePromptFor', () => {
 		expect(prompt!.validSeatIds).not.toContain('s6');
 	});
 
+	it('flags fellow evil seats as teammates for an evil asker', () => {
+		// s6 is the imp (demon); s5 is the poisoner (minion) — a known teammate
+		const prompt = choicePromptFor(ctxFor('s6'), getCharacter(troubleBrewing, 'imp')!);
+		expect(prompt!.teammateSeatIds).toContain('s5');
+		expect(prompt!.teammateSeatIds).not.toContain('s6');
+	});
+
+	it('flags no teammates for a good asker', () => {
+		const prompt = choicePromptFor(ctxFor('s0'), getCharacter(troubleBrewing, 'imp')!);
+		expect(prompt!.teammateSeatIds).toEqual([]);
+	});
+
 	it('returns null for non-choose prompts', () => {
 		expect(choicePromptFor(ctxFor('s0'), getCharacter(troubleBrewing, 'washerwoman')!)).toBeNull();
 	});
@@ -154,5 +168,38 @@ describe('wakeOrder', () => {
 		const steps = wakeOrder(troubleBrewing, seats, roleOf, 2);
 		const ids = steps.map((s) => s.character.id);
 		expect(ids).not.toContain('washerwoman');
+	});
+});
+
+describe('evilTeamKnowsEachOther: false (Laissez un Faire-style scripts)', () => {
+	const quietScript = { ...troubleBrewing, evilTeamKnowsEachOther: false as const };
+	function quietCtxFor(askingSeatId: string): NightContext {
+		return { script: quietScript, seats, roleOf, night: 1, askingSeatId };
+	}
+
+	it('produces no Night 1 evil reveal steps at all', () => {
+		expect(night1EvilReveals(quietCtxFor('s6'))).toEqual([]);
+	});
+
+	it('does not force the evil team to wake first on Night 1', () => {
+		const steps = wakeOrder(quietScript, seats, roleOf, 1);
+		// imp still acts (firstNight: 1 in trouble-brewing.ts) but not via the
+		// special evil-recognition insertion — this just checks the flag
+		// didn't crash wakeOrder and imp still appears once.
+		expect(steps.filter((s) => s.character.id === 'imp')).toHaveLength(1);
+	});
+
+	it('flags no teammates for the imp even though it is evil', () => {
+		const prompt = choicePromptFor(quietCtxFor('s6'), getCharacter(quietScript, 'imp')!);
+		expect(prompt!.teammateSeatIds).toEqual([]);
+	});
+});
+
+describe('balloonistCandidates', () => {
+	it('proposes a real other seat to show', () => {
+		const cands = balloonistCandidates(ctxFor('s0'));
+		expect(cands).toHaveLength(1);
+		expect(cands[0].seatIds?.[0]).not.toBe('s0');
+		expect(cands[0].truthful).toBe(true);
 	});
 });

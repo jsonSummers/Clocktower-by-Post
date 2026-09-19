@@ -8,7 +8,9 @@
 		isConfigured
 	} from '$lib/supabase';
 	import { GameSession } from '$lib/game.svelte';
+	import { base } from '$app/paths';
 	import { SCRIPTS, getScript, getCharacter } from '$lib/scripts';
+	import { applyScriptTheme } from '$lib/scriptTheme';
 	import { dealGame } from '$lib/scripts/deal';
 	import { nextPhase, phaseLabel } from '$lib/clock';
 	import { phase as phaseRpc, applyDeal, setSeatAlive, resolveMeet } from '$lib/actions';
@@ -46,6 +48,11 @@
 	let botSessions: GameSession[] = [];
 
 	const script = $derived(getScript(scriptId));
+	// Whole-page theme swap for the picked script -- see
+	// src/lib/scriptTheme.ts. This page shows both the Storyteller view and
+	// every bot's own screen in one document (only one at a time, per
+	// viewMode above), so one effect here covers all of it.
+	$effect(() => applyScriptTheme(scriptId));
 
 	function note(m: string) {
 		log = [...log, m];
@@ -289,7 +296,7 @@
 					<button onclick={toggleGather}>
 						{st.game.gather ? 'Clear gather' : 'Gather'}
 					</button>
-					<a class="btnlink" href="/host/{gameId}" target="_blank" rel="noreferrer">
+					<a class="btnlink" href="{base}/host/{gameId}" target="_blank" rel="noreferrer">
 						Open ST page ↗
 					</a>
 				</div>

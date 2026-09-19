@@ -31,12 +31,30 @@ export interface Character {
 	 * at night"), and only once (not repeated on every later night). See
 	 * wakeOrder() in nightInfo.ts and the filtering in NightDispatch.svelte. */
 	wakeIfDead?: boolean;
+	/** A player-initiated, in-person "go privately ask the Storyteller"
+	 * ability that isn't tied to the night wake order (Savant, Fisherman,
+	 * Artist, Amnesiac's daily guess). Reuses the existing meet-request
+	 * queue — see requestMeet()/resolveMeet() in actions.ts and dayAsk.ts —
+	 * rather than a new mechanism, since the real exchange happens face to
+	 * face and the app's only job is to flag the request and (for
+	 * Savant/Fisherman) prep the Storyteller with worked suggestions before
+	 * they walk over. */
+	dayAsk?: DayAskKind;
 }
+
+/** Which flavour of "player asks, Storyteller answers in person" this is —
+ * decides the tag on the meet-request and what (if anything) dayAsk.ts
+ * prepares for the Storyteller. See Character.dayAsk. */
+export type DayAskKind =
+	| { kind: 'savant' } // one true + one false statement, once per day
+	| { kind: 'fisherman'; oncePerGame: true } // one-time actionable advice
+	| { kind: 'artist'; oncePerGame: true } // one-time private yes/no/unknown question
+	| { kind: 'amnesiac' }; // daily guess at their own Storyteller-assigned ability
 
 export type NightPrompt =
 	| { kind: 'none' } // passive; nothing to send
 	| { kind: 'info-preplan' } // Storyteller writes the info ahead of time (Washerwoman…)
-	| { kind: 'info-auto'; compute: 'chef' | 'empath' | 'undertaker' } // app suggests, Storyteller confirms
+	| { kind: 'info-auto'; compute: 'chef' | 'empath' | 'undertaker' | 'balloonist' } // app suggests, Storyteller confirms
 	| { kind: 'choose'; count: 1 | 2; canPickSelf: boolean } // player picks seat(s) (Monk, Fortune Teller…)
 	| { kind: 'grimoire' }; // show the grimoire (Spy)
 
@@ -54,6 +72,14 @@ export interface Script {
 	minPlayers: number;
 	maxPlayers: number;
 	characters: Character[];
+	/** Whether the evil team wakes together on Night 1 to learn each other
+	 * (the Demon learns its Minions plus not-in-play bluffs; Minions learn
+	 * the Demon and their fellow Minions) — true for every official script,
+	 * but explicitly false for some Teensyville scripts (Laissez un Faire:
+	 * "the evil team does not learn who each other are"). Defaults to true
+	 * when omitted, so existing scripts don't need to set it. See
+	 * night1EvilReveals() and choicePromptFor() in nightInfo.ts. */
+	evilTeamKnowsEachOther?: boolean;
 }
 
 /** Base team composition for the three official scripts, by player count (5–15). */

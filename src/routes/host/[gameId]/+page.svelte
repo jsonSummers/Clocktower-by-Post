@@ -5,9 +5,13 @@
 	import { serverTimeSynced } from '$lib/server-time';
 	import { GameSession } from '$lib/game.svelte';
 	import { nextPhase, phaseLabel } from '$lib/clock';
-	import { getScript } from '$lib/scripts';
+	import { getScript, getCharacter } from '$lib/scripts';
+	import { applyScriptTheme } from '$lib/scriptTheme';
 	import { dealGame } from '$lib/scripts/deal';
 	import { checkWinCondition, voteState } from '$lib/scripts/winCondition';
+	import { checkVirgin } from '$lib/scripts/virgin';
+	import { savantPrep, fishermanPrep, ARTIST_GUIDANCE } from '$lib/dayAsk';
+	import { AMNESIAC_ABILITIES } from '$lib/scripts/amnesiac-abilities';
 	import {
 		phase as phaseRpc,
 		applyDeal,
@@ -19,6 +23,7 @@
 		clearDrunk,
 		setRedHerring,
 		clearRedHerring,
+		setGrimoireNote,
 		resolveMeet,
 		moveSeat,
 		kickSeat,
@@ -26,7 +31,8 @@
 		startVoting,
 		closeNomination,
 		markExecuted,
-		dismissNomination
+		dismissNomination,
+		resolveVirgin
 	} from '$lib/actions';
 	import type { Team } from '$lib/types';
 	import Circle from '$lib/components/Circle.svelte';
@@ -53,6 +59,9 @@
 	});
 
 	const script = $derived(session.game ? getScript(session.game.script_id) : undefined);
+	// Steampunk theme for Laissez un Faire, gothic for everything else --
+	// see src/lib/scriptTheme.ts. Resets on unmount (leaving the game).
+	$effect(() => applyScriptTheme(session.game?.script_id));
 	const nextLabel = $derived(
 		session.phase ? phaseLabel(nextPhase(session.phase, 0, 0)) : 'Night 1'
 	);
@@ -97,6 +106,13 @@
 		await run(setSeatAlive(supabase, latestNom.nominee_seat_id, false));
 		await run(markExecuted(supabase, latestNom.id));
 	}
+	const virginCheck = $derived(
+		openNom ? checkVirgin(openNom, session.nominations, session.roles, script) : null
+	);
+	async function fireVirgin() {
+		if (!openNom) return;
+		await run(resolveVirgin(supabase, openNom.id));
+	}
 	// Only surface the win check once the game is actually being played — not
 	// during lobby setup (before roles/seats have settled) or after the
 	// Storyteller has already ended it.
@@ -138,6 +154,23 @@
 
 	function isRedHerring(seatId: string): boolean {
 		return session.redHerringSeatId === seatId;
+	}
+
+	const AMNESIAC_NOTE_PREFIX = '[Amnesiac] ';
+
+	function amnesiacAbility(seatId: string): string | null {
+		const note = session.grimoire.find((g) => g.seat_id === seatId)?.notes ?? '';
+		return note.startsWith(AMNESIAC_NOTE_PREFIX) ? note.slice(AMNESIAC_NOTE_PREFIX.length) : null;
+	}
+
+	async function setAmnesiacAbility(seatId: string, text: string) {
+		if (!text) return;
+		await run(setGrimoireNote(supabase, gameId, seatId, `${AMNESIAC_NOTE_PREFIX}${text}`));
+	}
+
+	async function randomAmnesiacAbility(seatId: string) {
+		const pick = AMNESIAC_ABILITIES[Math.floor(Math.random() * AMNESIAC_ABILITIES.length)];
+		if (pick) await setAmnesiacAbility(seatId, pick.text);
 	}
 
 	/** Assigns a random not-in-play Townsfolk as this seat's cover story and
@@ -421,6 +454,31 @@
 								🐟 Make red herring
 							</button>
 						{/if}
+						{#if session.roleFor(seat.id) === 'amnesiac'}
+							<div class="row" style="align-items:center;gap:0.4rem;flex-wrap:wrap">
+								<span class="drunktag">
+									🌀 Secret ability: {amnesiacAbility(seat.id) ?? '— not set yet —'}
+								</span>
+							</div>
+							<div class="row" style="flex-wrap:wrap;gap:0.3rem">
+								<select
+									value=""
+									onchange={(e) => {
+										const v = e.currentTarget.value;
+										if (v) setAmnesiacAbility(seat.id, v);
+										e.currentTarget.value = '';
+									}}
+								>
+									<option value="">— pick a secret ability —</option>
+									{#each AMNESIAC_ABILITIES as a (a.id)}
+										<option value={a.text}>{a.name}</option>
+									{/each}
+								</select>
+								<button class="ghostvote" onclick={() => randomAmnesiacAbility(seat.id)}>
+									🎲 Random
+								</button>
+							</div>
+						{/if}
 						<select
 							value={session.roleFor(seat.id) ?? ''}
 							onchange={(e) =>
@@ -517,14 +575,33 @@
 								it — nothing here times it automatically.
 							</p>
 						{/if}
-						<div class="row">
-							<button class="primary" onclick={() => run(startVoting(supabase, openNom.id))}>
-								Start voting
-							</button>
-							<button onclick={() => run(dismissNomination(supabase, openNom.id))}>
-								Dismiss nomination
-							</button>
-						</div>
+						{#if virginCheck?.fires}
+							<p style="margin:0">
+								🔔 <strong>Virgin fires:</strong> the nominator,
+								<strong>{seatLabel(virginCheck.nominatorSeatId)}</strong>, is a Townsfolk — this
+								nomination ends with them executed instead of a debate/vote.
+							</p>
+							<div class="row">
+								<button class="danger" onclick={fireVirgin}>
+									Execute {seatLabel(virginCheck.nominatorSeatId)} instead (Virgin)
+								</button>
+								<button onclick={() => run(dismissNomination(supabase, openNom.id))}>
+									Dismiss nomination
+								</button>
+							</div>
+						{:else}
+							{#if virginCheck?.reason}
+								<p class="muted" style="margin:0">Virgin: {virginCheck.reason}</p>
+							{/if}
+							<div class="row">
+								<button class="primary" onclick={() => run(startVoting(supabase, openNom.id))}>
+									Start voting
+								</button>
+								<button onclick={() => run(dismissNomination(supabase, openNom.id))}>
+									Dismiss nomination
+								</button>
+							</div>
+						{/if}
 					</section>
 				{:else if openNom.stage === 'voting'}
 					<section class="card stack">
@@ -594,11 +671,53 @@
 				{/if}
 				{#each waiting as req, i (req.id)}
 					{@const seat = session.seats.find((s) => s.id === req.seat_id)}
+					{@const askerCharId = session.roleFor(req.seat_id)}
+					{@const askerChar = script && askerCharId ? getCharacter(script, askerCharId) : undefined}
 					<div class="card stack" style="gap:0.5rem">
 						<div>
 							<strong>#{i + 1} · {seat?.name ?? 'Unknown'}</strong>
 							{#if req.reason}<div class="muted">{req.reason}</div>{/if}
 						</div>
+						{#if askerChar?.dayAsk}
+							{@const dayAsk = askerChar.dayAsk}
+							<div class="dayask-prep stack" style="gap:0.3rem">
+								{#if dayAsk.kind === 'savant'}
+									{@const prep = savantPrep({
+										script: script!,
+										seats: session.seats,
+										roleOf: (id: string) => session.roleFor(id),
+										night: 0,
+										askingSeatId: req.seat_id
+									})}
+									<p class="muted" style="margin:0;font-size:0.8rem">{prep.guidance}</p>
+									{#each prep.candidates as c (c.label)}
+										<p style="margin:0;font-size:0.9rem"><strong>{c.label}:</strong> {c.text}</p>
+									{/each}
+								{:else if dayAsk.kind === 'fisherman'}
+									{@const prep = fishermanPrep({
+										script: script!,
+										seats: session.seats,
+										roleOf: (id: string) => session.roleFor(id),
+										night: 0,
+										askingSeatId: req.seat_id
+									})}
+									<p class="muted" style="margin:0;font-size:0.8rem">{prep.guidance}</p>
+									{#each prep.candidates as c (c.label)}
+										<p style="margin:0;font-size:0.9rem"><strong>{c.label}:</strong> {c.text}</p>
+									{/each}
+								{:else if dayAsk.kind === 'artist'}
+									<p class="muted" style="margin:0;font-size:0.8rem">{ARTIST_GUIDANCE}</p>
+								{:else if dayAsk.kind === 'amnesiac'}
+									<p style="margin:0;font-size:0.9rem">
+										<strong>Their secret ability:</strong>
+										{amnesiacAbility(req.seat_id) ?? '— not set yet, set it on the Seats tab —'}
+									</p>
+									<p class="muted" style="margin:0;font-size:0.8rem">
+										Their guess is above. Respond Cold / Warm / Hot / Bingo based on how close it is.
+									</p>
+								{/if}
+							</div>
+						{/if}
 						<div class="row">
 							<button class="primary" onclick={() => run(resolveMeet(supabase, req.id, 'met'))}>
 								Met

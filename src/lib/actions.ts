@@ -210,7 +210,10 @@ export function sendNightInfo(
 	);
 }
 
-/** Storyteller opens a choose-type prompt to a seat; the player then submits their pick via submitNightChoice. */
+/** Storyteller opens a choose-type prompt to a seat; the player then submits their pick via submitNightChoice.
+ * `teammateSeatIds` (a subset of validSeatIds) are seats the asking player
+ * already knows are fellow evil team members — see choicePromptFor() in
+ * nightInfo.ts — so the player's own choice screen can flag them. */
 export function askNightChoice(
 	c: SupabaseClient,
 	gameId: string,
@@ -218,7 +221,8 @@ export function askNightChoice(
 	seatId: string,
 	characterId: string,
 	abilityText: string,
-	validSeatIds: string[]
+	validSeatIds: string[],
+	teammateSeatIds: string[] = []
 ) {
 	return c.from('night_actions').upsert(
 		{
@@ -227,7 +231,7 @@ export function askNightChoice(
 			seat_id: seatId,
 			character_id: characterId,
 			prompt: abilityText,
-			choices: validSeatIds,
+			choices: { ids: validSeatIds, teammateIds: teammateSeatIds },
 			result: null,
 			released_at: new Date().toISOString()
 		},
@@ -320,4 +324,14 @@ export function markExecuted(c: SupabaseClient, nominationId: string) {
  * votes, so it doesn't count against that seat's once-per-day limit. */
 export function dismissNomination(c: SupabaseClient, nominationId: string) {
 	return c.from('nominations').delete().eq('id', nominationId);
+}
+
+/** Storyteller fires the Virgin's ability: the nominator is executed instead
+ * of the nominee, and the nomination closes with no debate/vote. Whether this
+ * SHOULD fire is decided client-side by checkVirgin() (src/lib/scripts/virgin.ts)
+ * — this action is only called from the explicit "Execute nominator instead
+ * (Virgin)" button, same pattern as every other storyteller ruling here. The
+ * RPC does the seat-death + nomination-close + day_log entry in one place. */
+export function resolveVirgin(c: SupabaseClient, nominationId: string) {
+	return c.rpc('resolve_virgin', { p_nomination_id: nominationId });
 }

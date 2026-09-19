@@ -29,6 +29,7 @@
 		infoCandidatesFor,
 		night1EvilReveals,
 		parseChoiceResult,
+		choicePromptFor,
 		type InfoCandidate
 	} from '$lib/nightInfo';
 	import {
@@ -175,10 +176,18 @@
 		editing[seatId] = false;
 	}
 
-	async function ask(seatId: string, characterId: string, ability: string, validSeatIds: string[]) {
+	async function ask(
+		seatId: string,
+		characterId: string,
+		ability: string,
+		validSeatIds: string[],
+		teammateSeatIds: string[] = []
+	) {
 		if (night == null) return;
 		actionError = null;
-		await run(askNightChoice(session.client, gameId, night, seatId, characterId, ability, validSeatIds));
+		await run(
+			askNightChoice(session.client, gameId, night, seatId, characterId, ability, validSeatIds, teammateSeatIds)
+		);
 	}
 
 	function startEdit(seatId: string, seedText: string) {
@@ -336,10 +345,18 @@
 					{/if}
 				{:else if kind === 'choose'}
 					{#if step.character.prompt.kind === 'choose'}
-						{@const alive = session.seats.filter((s) => s.alive)}
-						{@const pool = step.character.prompt.canPickSelf
-							? alive
-							: alive.filter((s) => s.id !== step.seat.id)}
+						{@const choicePrompt = choicePromptFor(
+							{
+								script: script!,
+								seats: session.seats,
+								roleOf: (id: string) => session.roleFor(id),
+								night: night!,
+								askingSeatId: step.seat.id
+							},
+							step.character
+						)}
+						{@const pool = session.seats.filter((s) => choicePrompt?.validSeatIds.includes(s.id))}
+						{@const teammateSeatIds = choicePrompt?.teammateSeatIds ?? []}
 						{#if reveal}
 							<p class="revealbox">{reveal}</p>
 						{/if}
@@ -350,6 +367,11 @@
 								among {pool.length} eligible {pool.length === 1 ? 'seat' : 'seats'}
 								{step.character.prompt.canPickSelf ? '(may pick themselves)' : '(not themselves)'}.
 							</p>
+							{#if teammateSeatIds.length}
+								<p class="muted" style="margin:0">
+									🤝 {teammateSeatIds.length} of those {teammateSeatIds.length === 1 ? 'seat is' : 'seats are'} a fellow evil teammate — flagged for the player too.
+								</p>
+							{/if}
 						{:else if action?.result}
 							{@const parsed = parseChoiceResult(action.result)}
 							<p style="margin:0">
@@ -406,6 +428,11 @@
 							<p class="muted" style="margin:0">Waiting on {step.seat.name || 'them'} to answer…</p>
 						{:else}
 							<p class="muted" style="margin:0">{step.character.summary}</p>
+							{#if teammateSeatIds.length}
+								<p class="muted teammate-note" style="margin:0">
+									🤝 {teammateSeatIds.map(seatName).join(', ')} will be flagged to {step.seat.name || 'them'} as fellow evil.
+								</p>
+							{/if}
 							<button
 								class="primary"
 								onclick={() =>
@@ -413,7 +440,8 @@
 										step.seat.id,
 										step.character.id,
 										reveal ? `${reveal}\n\n${step.character.summary}` : step.character.summary,
-										pool.map((s) => s.id)
+										pool.map((s) => s.id),
+										teammateSeatIds
 									)}
 							>
 								Ask {step.seat.name || 'them'} to choose
@@ -595,6 +623,9 @@
 	}
 	.hint {
 		font-size: 0.78rem;
+	}
+	.teammate-note {
+		color: var(--accent);
 	}
 	.grimoire-snapshot {
 		margin: 0;

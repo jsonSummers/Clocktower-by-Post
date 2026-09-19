@@ -2,9 +2,14 @@
 	import { goto } from '$app/navigation';
 	import { supabase, ensureSignedIn, isConfigured } from '$lib/supabase';
 	import { SCRIPTS } from '$lib/scripts';
+	import { applyScriptTheme } from '$lib/scriptTheme';
 	import type { GameRow } from '$lib/types';
 
 	let scriptId = $state(SCRIPTS[0].id);
+
+	// Live-preview the picked script's theme right here on the picker --
+	// see src/lib/scriptTheme.ts. Resets to the gothic default on unmount.
+	$effect(() => applyScriptTheme(scriptId));
 	let seatCount = $state(8);
 	let joinCode = $state('');
 	let playerName = $state('');

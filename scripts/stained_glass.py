@@ -102,6 +102,101 @@ own dedicated ridge highlight still shows) the backlight/reflection blend on
 leading pixels, fixing a real bug where a reflection streak crossing the
 ink washed a properly black line out to visibly grey.
 
+v8 responds to three requests together, after testing turned up why some
+outlines were still visibly merging: (1) the actual cause wasn't the
+brightness/chroma thresholds at all -- a sweep confirmed `close_gap_iterations`
+(2) simply wasn't bridging every real break in the ink network, letting a
+whole background wedge leak into its neighbour through one small gap (visible
+as a single oversized connected-component "pane" spanning what should be two
+separate shapes). Raised to 4, plus a modest `line_gray_max` (80->88) and
+`line_max_halfwidth` (5.0->5.5) bump so genuinely faint/antialiased ink is
+still caught -- confirmed on the actual paintings that this doesn't reopen
+the v2/v3 dark-fill bugs, since the thinness gate that protects against those
+is untouched. (2) `_bevel_leading()`: the came now has an actual rounded
+profile -- a highlight on the side facing a light source, a shadow on the
+far side, via the standard emboss trick (gradient of `line_dist`, already a
+height field peaked along each line's centre, dotted with a light direction)
+-- layered on top of, not replacing, the existing central ridge catch-light.
+The same technique gets reused as a gentle single-light-source relief pass
+on the stone border, on top of its existing radial depth shading. (3)
+`_glass_texture()`: a fine dimpled "orange-peel" bump (the same directional-
+light shading trick again, at a much smaller noise scale) plus an optional
+sub-pixel refractive warp via `map_coordinates`, both confined off the
+leading so ink stays crisp -- an attempt at an actual glass SURFACE rather
+than a flat-shaded fill. `light_strength`/`reflect_strength` also nudged up
+slightly (0.28->0.32, 0.12->0.15) per feedback wanting "a little more"
+light/reflection, not a redesign of that pass.
+
+v9 tracks down what "the black line blur is still pretty constant" actually
+was, after a first guess (broad dark FILLS reading as indistinguishable from
+the leading -- see `_lift_dark_panes()` below, kept as a real but secondary
+fix) turned out not to be it: measured directly, the real cause was v8's own
+`close_gap_iterations` bump (2->4). `ndimage.binary_closing` is dilate-then-
+erode, and dilation is what decides whether two nearby-but-separate strokes
+touch and fuse -- erosion afterwards only cleans up the OUTER edge of
+whatever already got fused, it can't un-fuse it. In a face crop (eyebrows,
+nose, eyelids all a few px apart) that pushed line coverage from 28% to 42%
+of the area -- a real, measurable thickening/blobbing, not a subjective
+impression, and this project's own prior docstring claim that closing
+"fills gaps... without thickening lines meant to stay separate" was simply
+wrong. Replaced with `_bridge_line_gaps()`: skeletonize the raw mask
+(scikit-image), find true endpoints (a stroke dangling rather than
+continuing or meeting another at a junction), and bridge only endpoint
+pairs from DIFFERENT strokes within `bridge_gap_px` -- so two strokes that
+are each already a closed shape (no dangling ends) are never touched, no
+matter how close together they sit; only an actual break grows new ink,
+confined to the bridge itself. `close_gap_iterations` (now default 0, was 4)
+is demoted to an optional, tiny single-pixel antialiasing touch-up on top of
+that, not the main gap-filler -- and off by default, because it turns out
+`binary_closing` is non-monotonic on these paintings: measured directly on
+the same test image, 1-2 iterations merged panes MORE than 3-4 did (a
+thin bridge the dilation step creates can survive a light erosion but get
+fully eroded back off by a heavier one, which can leave a *different*,
+thicker accidental connection as the one that survives instead -- there's
+no small iteration count that's reliably the safe side of that). Alignment-
+gated bridging turned out to be very conservative on its own test image too
+(added close to zero net pixels there) -- real gap-closing robustness is
+still a known weak spot, just no longer one that trades away crisp faces to
+get. `_lift_dark_panes()` is kept alongside this as a
+genuine, separate improvement found along the way: every pass that shapes a
+pane's colour (glow, mottle, bloom, grade, the v8 texture bump) is
+multiplicative, and multiplying a pixel already near (0,0,0) by anything is
+still near (0,0,0) -- no brightness lever there could pull a dark FILL away
+from black, so it blends each pane pixel toward a slightly cool `ambient`
+floor as its own luminance approaches 0, fading to a no-op above
+`dark_pane_floor` (40 by default) -- real stained glass is never fully
+opaque even at its darkest, where the lead came holding it properly is.
+Reflection pushed further too, per feedback wanting more of it on top of
+the already-hand-edited review defaults: library defaults now match what
+had drifted ahead of them in review_portraits.py's own CLI (`reflect_strength`
+0.15->0.40, `light_strength` 0.32->0.38, `bevel_strength` 0.35->0.5,
+`backlight_warmth` 0.35->0.5, `texture_strength` 0.35->0.15) -- the two
+files had quietly diverged; they're back in lockstep.
+
+v11 responds to "colours all look washed out... going for deep stained
+windows": the `_gothic_grade` saturation/contrast boost (v7) runs early in
+the pipeline, but `_finish_glass` -- the whole-window backlight glow and
+diagonal reflection streaks -- runs LAST, after every other pass, and was
+blending up to 85% of the way toward near-white/warm-gold over a broad
+soft-edged area (the backlight) plus two more streaks (the reflection).
+That's not a subtle glaze on top of the richer colour the grade pass just
+added -- measured directly, it was diluting most of it back out, which
+reads exactly as "washed out" even though the saturation boost is real and
+still there underneath. Three changes together, not one: (1) `sat_boost`
+0.22->0.42 and `contrast` 0.10->0.16 in `_gothic_grade`, so the jewel tones
+read deeper and richer to begin with; (2) `light_strength` 0.38->0.24 and
+`reflect_strength` 0.40->0.22 (library defaults, CLI defaults in both this
+file and review_portraits.py, kept in lockstep per the v9 note above) --
+still enough for a "light coming through glass" read, just not enough to
+overpower it; (3) a firm ceiling on both blends in `_finish_glass` itself
+(0.85->0.5), independent of the strength knobs, so pushing either back up
+later can brighten the glow without ever again flattening a pane toward
+plain white. `bloom` (the PRESETS screen-blend) trimmed similarly (subtle
+0.10->0.07, medium 0.16->0.11, strong 0.24->0.15) for the same reason on a
+smaller scale. The stone border, the came, and the per-pane sparkle are all
+untouched -- this is specifically about the pane FILL colour reading as
+deep saturated glass instead of pastel.
+
 Usage:
     python3 stained_glass.py IN.png OUT.png [--strength subtle|medium|strong]
 
@@ -181,9 +276,9 @@ PRESETS = {
     # bloom: soft overall backlit glow
     # highlight: how much pewter highlight the lead came gets (kept low --
     #            this is a thin catch-light, not a colour wash)
-    "subtle": dict(glow=0.16, edge_darken=0.10, noise=0.05, noise_scale=60, bloom=0.10, highlight=0.12),
-    "medium": dict(glow=0.26, edge_darken=0.16, noise=0.08, noise_scale=45, bloom=0.16, highlight=0.18),
-    "strong": dict(glow=0.36, edge_darken=0.24, noise=0.13, noise_scale=35, bloom=0.24, highlight=0.24),
+    "subtle": dict(glow=0.16, edge_darken=0.10, noise=0.05, noise_scale=60, bloom=0.07, highlight=0.12),
+    "medium": dict(glow=0.26, edge_darken=0.16, noise=0.08, noise_scale=45, bloom=0.11, highlight=0.18),
+    "strong": dict(glow=0.36, edge_darken=0.24, noise=0.13, noise_scale=35, bloom=0.15, highlight=0.24),
 }
 
 
@@ -196,50 +291,214 @@ def _smooth_noise(h, w, scale, seed):
     return (field / 127.5) - 1.0  # back to -1..1
 
 
-def find_leading(rgb, line_gray_max=80, line_chroma_max=26, line_max_halfwidth=5.0,
-                  close_iterations=2):
-    """True leading: dark AND desaturated AND thin.
+def _endpoint_direction(skel, y0, x0, steps=5):
+    """Walk back up to `steps` pixels along the skeleton from an endpoint,
+    and return the unit vector (dy, dx) pointing OUTWARD -- the direction
+    the dangling stroke is heading, i.e. where it would continue if the
+    break weren't there. None if the stroke is too short to get a direction
+    from (its own single pixel, or a 1-2px stub)."""
+    visited = {(y0, x0)}
+    cy, cx = y0, x0
+    far = (y0, x0)
+    h, w = skel.shape
+    for _ in range(steps):
+        nxt = None
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = cy + dy, cx + dx
+                if (ny, nx) in visited:
+                    continue
+                if 0 <= ny < h and 0 <= nx < w and skel[ny, nx]:
+                    nxt = (ny, nx)
+                    break
+            if nxt:
+                break
+        if nxt is None:
+            break
+        visited.add(nxt)
+        cy, cx = nxt
+        far = nxt
+    dy, dx = y0 - far[0], x0 - far[1]
+    norm = (dy * dy + dx * dx) ** 0.5
+    if norm < 1.5:  # too short a stub to trust a direction
+        return None
+    return dy / norm, dx / norm
 
-    Dark+desaturated alone isn't enough — a broad, flat, near-black or
-    charcoal-grey FILL (a shadowed cave wall, grey horns, a dark cloak) can
-    be every bit as dark and desaturated as real ink, especially on
-    deliberately dark evil-character palettes. The extra test is thinness:
-    real leading is always a thin stroke. `dist`, the distance transform of
-    the dark+desaturated candidate mask, is each candidate pixel's distance
-    to the nearest pixel that *isn't* dark+desaturated — small and roughly
-    constant along the centre of a thin stroke, but large in the interior
-    of any broad fill. This has to be a per-pixel (pointwise) test, not a
-    per-connected-component one like the gap-fill below uses: essentially
-    every line in one of these paintings touches every other line somewhere
-    (a junction), so the whole ink network is typically one giant connected
-    component — a component-level test would disqualify all of it the
-    moment that component touched one thick junction blob or one broad dark
-    fill. Pointwise, each thin segment still reads as thin no matter what
-    it's connected to.
 
-    v7 closes small breaks in the line NETWORK ITSELF (`close_iterations`,
-    via `ndimage.binary_closing`) rather than relying only on
-    `find_and_fill_gaps` recolouring pale pixels back in afterwards. That
-    color-based gap fill only catches a break if the missing pixels happen
-    to read as pale/neutral — an antialiased or slightly tinted break (the
-    kind still visible as "gaps" in the black lines after the v2 fix)
-    doesn't qualify, but geometric closing doesn't care what colour the gap
-    pixels are: it just bridges two nearby true regions of this mask. A
-    closing is dilate-then-erode, which is idempotent on shapes already
-    larger than the structuring element, so it only fills small gaps/
-    concavities (here, up to ~2*close_iterations px) without thickening or
-    merging lines that are genuinely meant to stay separate.
+def _bridge_line_gaps(is_line_raw, max_gap_px=8.0, touch_up_iterations=1, align_thresh=0.25):
+    """Bridge genuine breaks in the ink NETWORK's topology -- a stroke that
+    dangles instead of meeting another stroke -- without also fattening or
+    fusing strokes that are simply close together but were never meant to
+    join (two eyebrows either side of a nose bridge, say).
+
+    v7/v8 did this with `ndimage.binary_closing`, and that function's own
+    docstring used to claim closing does this "without thickening... lines
+    that are genuinely meant to stay separate" -- measured on the actual
+    paintings, that's not true: closing is dilate-then-erode, and dilation
+    alone is what decides whether two nearby-but-separate strokes touch and
+    permanently fuse into one blob; erosion afterwards only cleans up the
+    outer edges of whatever the dilation already merged, it can't un-fuse
+    them. On a face, where eyebrows/nose/eyelids sit a few px apart, that
+    measurably fattened and blobbed the linework (close_iterations=4 pushed
+    line coverage in one such crop from 28% to 42% of the area) -- reported
+    back as "the black line blur is still pretty constant".
+
+    This is the surgical alternative: skeletonize the raw (un-bridged) mask
+    down to a 1px topological skeleton, find its ENDPOINTS (skeleton pixels
+    with exactly one neighbour -- i.e. where a stroke dangles rather than
+    continuing or forming a junction), and for each endpoint whose nearest
+    endpoint belonging to a *different* stroke is within `max_gap_px`, draw
+    a short segment directly between them. Two strokes that are already
+    fully closed shapes running near each other (no dangling ends) have no
+    endpoints to bridge, so they're never touched -- only real gaps grow new
+    ink, and only exactly where the gap is.
+
+    A nearest-endpoint match alone still over-bridges on a detail-dense
+    painting (lots of small decorative strokes -- fingers, jewellery,
+    highlights -- put lots of endpoints close together that were never
+    supposed to meet): tested on the actual paintings, distance-only
+    bridging fused MORE panes than the old closing approach did. So a
+    candidate pair only gets bridged if BOTH endpoints' own local direction
+    (`_endpoint_direction`, a short walk back along the skeleton) points
+    roughly at each other, within `align_thresh` (a dot product, so 1.0 is
+    dead-on and 0 is perpendicular) -- i.e. the gap reads as a plausible
+    continuation of the same stroke, not two unrelated strokes that just
+    happen to end up near each other.
+
+    Falls back to a light `binary_closing` (`touch_up_iterations`, small on
+    purpose -- this is just for single-pixel antialiasing nicks, not
+    structural gaps) if scikit-image isn't installed to skeletonize with.
+    """
+    if not is_line_raw.any():
+        return is_line_raw
+
+    try:
+        from skimage.morphology import skeletonize
+        from scipy.spatial import cKDTree
+    except ImportError:
+        if touch_up_iterations <= 0:
+            return is_line_raw
+        return ndimage.binary_closing(
+            is_line_raw, structure=np.ones((3, 3)), iterations=touch_up_iterations
+        )
+
+    skel = skeletonize(is_line_raw)
+    neighbour_count = (
+        ndimage.convolve(skel.astype(np.uint8), np.ones((3, 3), dtype=np.uint8), mode="constant")
+        - skel.astype(np.uint8)
+    )
+    endpoints = skel & (neighbour_count == 1)
+    ys, xs = np.nonzero(endpoints)
+
+    bridged = is_line_raw
+    if len(ys) >= 2:
+        comp_labels, _ = ndimage.label(is_line_raw, structure=np.ones((3, 3)))
+        endpoint_comp = comp_labels[ys, xs]
+        directions = [_endpoint_direction(skel, int(y), int(x)) for y, x in zip(ys, xs)]
+        pts = np.column_stack([xs, ys]).astype(np.float64)
+        tree = cKDTree(pts)
+        k = min(8, len(pts))
+        dists, idxs = tree.query(pts, k=k)
+        if k == 1:  # a single endpoint has no partner to query against
+            dists, idxs = dists[:, None], idxs[:, None]
+
+        new_pixels = np.zeros_like(is_line_raw)
+        drawn_pairs = set()
+        for i in range(len(pts)):
+            di = directions[i]
+            if di is None:
+                continue  # too short a stub to trust which way it's heading
+            for col in range(1, dists.shape[1]):
+                j = int(idxs[i, col])
+                d = dists[i, col]
+                if d > max_gap_px:
+                    break  # neighbours are distance-sorted; nothing closer remains
+                if endpoint_comp[i] == endpoint_comp[j]:
+                    continue  # same stroke, already connected -- not a gap
+                dj = directions[j]
+                if dj is None:
+                    continue
+                x0, y0 = pts[i]
+                x1, y1 = pts[j]
+                towards_j = ((y1 - y0) / d, (x1 - x0) / d)
+                towards_i = (-towards_j[0], -towards_j[1])
+                aligned_i = di[0] * towards_j[0] + di[1] * towards_j[1]
+                aligned_j = dj[0] * towards_i[0] + dj[1] * towards_i[1]
+                if aligned_i < align_thresh or aligned_j < align_thresh:
+                    continue  # this endpoint isn't actually heading toward that one
+                pair = (min(i, j), max(i, j))
+                if pair in drawn_pairs:
+                    continue
+                drawn_pairs.add(pair)
+                steps = max(2, int(d) + 1)
+                for t in np.linspace(0, 1, steps):
+                    yy, xx = int(round(y0 + (y1 - y0) * t)), int(round(x0 + (x1 - x0) * t))
+                    if 0 <= yy < new_pixels.shape[0] and 0 <= xx < new_pixels.shape[1]:
+                        new_pixels[yy, xx] = True
+                break  # bridge only to the single nearest aligned cross-stroke endpoint
+
+        if new_pixels.any():
+            # Give just the new bridge segments the same ~2-3px weight as a
+            # real stroke -- dilating only the new pixels, never the
+            # pre-existing network, keeps this fix confined to actual gaps.
+            new_pixels = ndimage.binary_dilation(new_pixels, structure=np.ones((3, 3)))
+            bridged = is_line_raw | new_pixels
+
+    if touch_up_iterations > 0:
+        bridged = ndimage.binary_closing(
+            bridged, structure=np.ones((3, 3)), iterations=touch_up_iterations
+        )
+    return bridged
+
+
+def find_leading(rgb, line_max_halfwidth=11.0, line_contrast_min=16.0,
+                  line_chroma_max=40, close_iterations=0, bridge_gap_px=8.0):
+    """True leading, found by LOCAL CONTRAST rather than absolute darkness.
+
+    v10: the old test (dark+desaturated AND thin, thinness measured as a
+    pixel's own distance to the nearest pixel that *isn't* dark+desaturated)
+    broke down whenever the PAINT AROUND a line was itself dark and
+    desaturated -- the Librarian's bookshelf, the Monk's stone archway, the
+    Imp's cave: all deliberately moody, dark backgrounds. There, ink and
+    fill both passed the same absolute darkness test, so there was no local
+    edge for that distance transform to find -- a line buried in a dark
+    fill scored just as "thick" as the fill itself, got excluded as
+    leading, and came back as a stray sliver pane of its own. That's the
+    hollow/double-rail dashing and fused-together regions that were
+    reported ("the black line bit is bad, regions merge"); confirmed
+    directly by rendering the old `is_line` mask and seeing the ink network
+    come out as parallel outlines with the middle of every line missing.
+
+    Fix: judge ink by LOCAL contrast, not absolute brightness, via a
+    grayscale morphological closing (`ndimage.grey_closing`, disk radius
+    `line_max_halfwidth`) -- the standard black-hat move. A broad dark FILL
+    is wider than the disk, so closing can't reach past it: contrast ~0,
+    correctly left as a pane. A thin dark STROKE is narrower than the disk,
+    so closing bridges clean across it to the lighter colour on either
+    side: contrast spikes. Works the same regardless of whether the
+    surrounding paint is pale or dark. `line_chroma_max` still guards
+    against a saturated dark fill (navy, forest green) reading as ink.
+
+    `line_max_halfwidth` still means the widest half-width of stroke still
+    treated as leading -- just measured as a closing radius now instead of
+    a distance-threshold. Real ink on these 1000x1500 paintings runs
+    roughly 6-16px including thick junctions, so the default is well above
+    the old 5.5px, which was simply too small and was carving the centre
+    out of any normal-width line, even against a light background.
     """
     gray = rgb.mean(axis=2)
     chroma = rgb.max(axis=2) - rgb.min(axis=2)
-    candidate = (gray < line_gray_max) & (chroma < line_chroma_max)
-    dist = ndimage.distance_transform_edt(candidate)
-    is_line = candidate & (dist <= line_max_halfwidth)
-    if close_iterations > 0:
-        is_line = ndimage.binary_closing(
-            is_line, structure=np.ones((3, 3)), iterations=close_iterations
-        )
+    radius = max(1, int(round(line_max_halfwidth)))
+    yy, xx = np.ogrid[-radius:radius + 1, -radius:radius + 1]
+    disk = (xx * xx + yy * yy) <= radius * radius
+    closed = ndimage.grey_closing(gray, footprint=disk)
+    contrast = closed - gray
+    is_line = (contrast > line_contrast_min) & (chroma < line_chroma_max)
+    is_line = _bridge_line_gaps(is_line, max_gap_px=bridge_gap_px, touch_up_iterations=close_iterations)
     return is_line
+
 
 
 def find_and_fill_gaps(rgb, is_line, gray_min=110, chroma_max=28, max_halfwidth=3.0):
@@ -323,6 +582,14 @@ def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.050, n_courses=34):
     depth = np.clip(dist_in / np.maximum(thickness, 1e-3), 0, 1)
     stone = stone * (0.80 + 0.32 * depth)[..., None]
 
+    # A single-light-source bevel across the whole reveal, same technique and
+    # same light direction as the came bevel below -- the carved stone should
+    # look lit by the one light the leading and glass are lit by, not by its
+    # own separate radial glow. Kept gentle: this rides on top of the radial
+    # relief shading above, it doesn't replace it.
+    bevel = _directional_bevel(dist_in, is_border)
+    stone = stone * (1.0 + 0.18 * bevel)[..., None]
+
     # Coursed-stone seams, evenly spaced along the arch's own perimeter.
     arclen = _arclen_map(w, h)
     phase = (arclen * n_courses) % 1.0
@@ -341,7 +608,7 @@ def _stone_border(w, h, arch_mask, seed=0, thick_frac=0.050, n_courses=34):
     return is_border, np.clip(stone, 0, 255)
 
 
-def _gothic_grade(rgb, sat_boost=0.22, contrast=0.10, shadow_tint_strength=0.12):
+def _gothic_grade(rgb, sat_boost=0.42, contrast=0.16, shadow_tint_strength=0.16):
     """v7: 'moodier, gothic in colour', applied to the pane fills only (the
     leading gets its own dedicated near-black came colour, untouched here).
 
@@ -373,52 +640,228 @@ def _gothic_grade(rgb, sat_boost=0.22, contrast=0.10, shadow_tint_strength=0.12)
     return np.clip(rgb, 0, 255)
 
 
+def _lift_dark_panes(panes, floor=40.0, ambient=(30.0, 28.0, 34.0)):
+    """v9: stop broad dark FILLS (a shadowed recess, a charcoal wedge) from
+    rendering close enough to true black that they visually fuse with the
+    leading around them -- reported as outlines reading as one constant
+    smear of black rather than crisp ink on top of distinct, if dark, glass.
+
+    The bug: every earlier pass on `panes` (glow, mottle, bloom, gothic
+    grade, the texture bump) is MULTIPLICATIVE. Multiplying a pixel that's
+    already near (0, 0, 0) by any of those factors is still near (0, 0, 0)
+    -- there is no brightness lever left that can pull a truly dark fill
+    away from the came's own near-black. Real stained glass doesn't have
+    this problem: even the darkest glass a studio stocks still passes a
+    little light and reads as a deep colour, never as opaque as the lead
+    came holding it -- that's the distinction this restores, with an
+    additive floor instead of another multiply. Blends toward a slightly
+    cool `ambient` (never flat/pure grey -- a hint of colour still reads as
+    glass, not paint) as a pixel's own luminance approaches 0, fading to a
+    no-op by `floor` so mid-tones and highlights are untouched. Deliberately
+    applied to every pane pixel, unconditionally -- the leading gets
+    overwritten with its own dedicated (and now more clearly separated)
+    near-black right after this, so there's no need to mask it out here.
+    """
+    luma = panes.mean(axis=2, keepdims=True)
+    t = np.clip(1.0 - luma / floor, 0, 1) ** 1.2
+    amb = np.array(ambient, dtype=np.float32)
+    return panes * (1 - t) + (panes + amb) * t
+
+
+_LIGHT_DIR = (-0.65, -0.75)  # upper-left, matching the existing gloss/backlight direction
+
+
+def _directional_bevel(height, mask, light_dir=_LIGHT_DIR, blur_sigma=1.0):
+    """Shade a mask by treating `height` as a bump/ridge and lighting it from
+    `light_dir` (dx, dy; "from" direction, upper-left is negative/negative).
+    Returns a -1..1 array (0 outside `mask`): positive where the local slope
+    faces the light (a highlight), negative where it faces away (a shadow).
+
+    This is the standard emboss trick -- gradient of a height field stands in
+    for a surface normal's tilt, and its dot product with the light direction
+    gives a Lambertian-style shade -- applied here to `line_dist` (leading)
+    or `dist_in` (the stone border), both of which are already 0 at an edge
+    and rising inward, i.e. already a usable "height". A field built from a
+    boolean mask is blocky, so it's blurred first for a smooth bevel instead
+    of a staircase of shading bands.
+    """
+    smooth = ndimage.gaussian_filter(height.astype(np.float32), blur_sigma)
+    gy, gx = np.gradient(smooth)
+    mag = np.hypot(gx, gy)
+    lx, ly = light_dir
+    lnorm = (lx * lx + ly * ly) ** 0.5
+    lx, ly = lx / lnorm, ly / lnorm
+    # Normalize the gradient direction but keep it 0 on dead-flat ground
+    # (ridge tops, deep interiors) instead of amplifying near-zero noise.
+    safe_mag = np.maximum(mag, 1e-6)
+    shade = (gx / safe_mag * lx + gy / safe_mag * ly) * np.clip(mag * 3.0, 0, 1)
+    return np.where(mask, shade, 0.0)
+
+
+def _bevel_leading(came_color, is_line, line_dist, strength=0.35):
+    """Give the came a rounded metal profile instead of a flat-shaded one: a
+    highlight down the side facing the light, a shadow down the side facing
+    away, either side of the existing central ridge highlight. `line_dist`
+    (distance-to-nearest-non-line, already computed by the caller) is 0 at
+    each edge of a line and peaks along its centre, so its gradient points
+    "outward" from the centreline in a different direction on each side --
+    exactly the two bevel faces of a rounded strip. Deliberately layered on
+    top of, not instead of, the existing ridge catch-light: real leaded came
+    has both a rounded profile AND a brighter strip right along its spine.
+    """
+    if strength <= 0:
+        return came_color
+    shade = _directional_bevel(line_dist, is_line)
+    factor = 1.0 + strength * shade
+    return np.clip(came_color * factor[..., None], 0, 255)
+
+
+def _glass_texture(rgb, w, h, exclude_mask, seed=0, strength=0.35, warp_px=0.5):
+    """Give the panes an actual glass SURFACE instead of a flat-shaded fill --
+    real cast/rolled glass (the cathedral-glass look these avatars are going
+    for) is never optically flat. Two ingredients, both confined away from
+    `exclude_mask` (the leading, so ink stays crisp):
+
+      - a fine 'orange-peel' bump: small-scale noise turned into a normal-map-
+        style shade via the same directional-light trick `_bevel_leading`
+        uses, so the surface reads as gently dimpled rather than airbrushed;
+      - a very slight spatial warp (sub-pixel to ~1px), displacing pixels by
+        a smooth noise field via `map_coordinates` -- real glass refracts
+        what's behind it, so this is a distortion, not a filter. Kept tiny on
+        purpose: these avatars render small (a seat-circle thumbnail), and
+        anything bigger would blur the linework and misregister it against
+        the leading rather than reading as glass.
+    """
+    bump = _smooth_noise(h, w, scale=5, seed=seed + 900)
+    bump_smooth = ndimage.gaussian_filter(bump, 0.8)
+    gy, gx = np.gradient(bump_smooth)
+    mag = np.hypot(gx, gy)
+    lx, ly = _LIGHT_DIR
+    lnorm = (lx * lx + ly * ly) ** 0.5
+    lx, ly = lx / lnorm, ly / lnorm
+    safe_mag = np.maximum(mag, 1e-6)
+    shade = (gx / safe_mag * lx + gy / safe_mag * ly) * np.clip(mag * 25.0, 0, 1)
+    shade = np.where(exclude_mask, 0.0, shade)
+    out = rgb * (1.0 + 0.16 * strength * shade[..., None])
+
+    if warp_px > 0:
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        dx = _smooth_noise(h, w, scale=10, seed=seed + 901) * warp_px
+        dy = _smooth_noise(h, w, scale=10, seed=seed + 902) * warp_px
+        coords_y = np.clip(yy + dy, 0, h - 1)
+        coords_x = np.clip(xx + dx, 0, w - 1)
+        warped = np.stack(
+            [ndimage.map_coordinates(out[..., c], [coords_y, coords_x], order=1, mode="nearest")
+             for c in range(3)],
+            axis=-1,
+        )
+        out = np.where(exclude_mask[..., None], out, warped)
+
+    return np.clip(out, 0, 255)
+
+
+def _pane_sparkle(rgb, w, h, labels, n, glass_mask, seed=0, strength=0.35,
+                   light_dir=_LIGHT_DIR, min_pane_px=250):
+    """v10: one small catch-light per individual glass pane, so adjoining
+    panes -- including two similarly-coloured or equally grey ones -- read
+    as distinct, separately set pieces of glass rather than one continuous
+    wash. Restores the spirit of v6's per-pane reflection (reverted in v7
+    as too busy at one-streak-per-window scale) but quieter: one small
+    highlight each, not a shape-spanning streak. Only reachable now because
+    `find_leading` actually separates panes correctly -- v6's version ran
+    on a `labels` map already prone to fusing neighbours, likely why it
+    read as messy enough to revert.
+
+    Each highlight sits at its pane's own "widest interior point" (the
+    peak of that pane's distance-to-edge map, restricted to `glass_mask` so
+    a pane mostly hidden by the stone border is only sized by its visible
+    sliver), nudged toward `light_dir` but scaled to the pane's own radius
+    so it can't drift outside the shape. Panes under `min_pane_px` are
+    skipped -- a highlight that small reads as a stray fleck, not glass.
+    """
+    if n == 0 or strength <= 0:
+        return rgb
+    labels = np.where(glass_mask, labels, 0)
+    sizes = ndimage.sum(np.ones_like(labels, dtype=np.float32), labels, index=np.arange(1, n + 1))
+    dist = ndimage.distance_transform_edt(glass_mask)
+    maxval = ndimage.maximum(dist, labels, index=np.arange(1, n + 1))
+    maxpos = ndimage.maximum_position(dist, labels, index=np.arange(1, n + 1))
+
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    lx, ly = light_dir
+    lnorm = (lx * lx + ly * ly) ** 0.5
+    lx, ly = lx / lnorm, ly / lnorm
+    rng = np.random.RandomState(seed + 777)
+
+    accum = np.zeros((h, w), dtype=np.float32)
+    for i in range(n):
+        if sizes[i] < min_pane_px:
+            continue
+        r = maxval[i]
+        if not np.isfinite(r) or r < 4:
+            continue
+        py, px = maxpos[i]
+        jitter = rng.uniform(0.7, 1.0)
+        ox = px + lx * r * 0.35 * jitter
+        oy = py + ly * r * 0.35 * jitter
+        sigma = max(3.0, min(r * 0.55, 40.0))
+        accum = np.maximum(
+            accum,
+            np.exp(-(((xx - ox) ** 2 + (yy - oy) ** 2) / (2 * sigma ** 2))),
+        )
+
+    amt = np.where(glass_mask, np.clip(accum * strength, 0, 0.9), 0.0)
+    return rgb + (255.0 - rgb) * amt[..., None]
+
+
+def _candle_glint(rgb, w, h, glass_mask, color=(255, 170, 90),
+                   center=(0.14, 0.86), radius_frac=0.16, strength=0.16):
+    """Mickey: "another very small reflection on the panels that reflects
+    the candle light" -- a single small, soft highlight low on the
+    window's own left side (roughly where the candle overlay sits just
+    outside the frame in Avatar.svelte), tinted toward the candle-glow
+    colour instead of neutral white like `_pane_sparkle` above, so it
+    reads as the glass catching light FROM the candle rather than another
+    generic sparkle. Deliberately smaller and much fainter than the
+    whole-window reflection streaks in `_finish_glass` -- one soft glint,
+    not another diagonal band. `color` defaults to a warm gold matching
+    Trouble Brewing's flame; pass a cooler blue for a future Laissez un
+    Faire portrait once that art exists.
+    """
+    if strength <= 0:
+        return rgb
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    nx, ny = xx / w, yy / h
+    cx, cy = center
+    r = radius_frac
+    d2 = ((nx - cx) / r) ** 2 + ((ny - cy) / (r * 1.15)) ** 2
+    glint = np.exp(-d2 * 1.6)
+    amt = np.where(glass_mask, np.clip(glint * strength, 0, 0.5), 0.0)
+    tint = np.array(color, dtype=np.float32)
+    return rgb + (tint[None, None, :] - rgb) * amt[..., None]
+
+
 def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
                    depth_strength=0.10, light_strength=0.28,
                    reflect_strength=0.12, backlight_warmth=0.35,
-                   is_line=None, line_light_guard=0.88):
-    """Applied last, over the whole finished window. Three ingredients:
+                   is_line=None, line_light_guard=0.88,
+                   pane_sparkle_strength=0.35,
+                   candle_glint_strength=0.0, candle_glint_color=(255, 170, 90)):
+    """Applied last, over the whole finished window. Four ingredients: a
+    DEPTH vignette (darkest toward the lower corners); a broad soft
+    BACKLIGHT glow tinted by `backlight_warmth`; one restrained pair of
+    whole-window diagonal REFLECTION streaks; and (v10) a per-pane SPARKLE
+    (`_pane_sparkle`, above) -- one small catch-light per individual pane,
+    brought back per a direct request ("each coloured region... should be
+    distinct, shiny") now that `find_leading` separates panes correctly
+    (the earlier per-pane attempt, v6, ran on a leading detector prone to
+    fusing neighbours, likely why it read as messy enough to revert in v7).
 
-      - a gentle DEPTH vignette over the whole window (glass, stone, lead
-        alike) -- darkest toward the lower corners, clear near the top --
-        reads as the window sitting a little recessed.
-      - a broad, soft BACKLIGHT glow, also over the whole window -- as if
-        daylight is genuinely coming through from behind, not just glinting
-        off the surface. `backlight_warmth` tints this glow away from flat
-        white toward an antique-glass gold (0 = white, 1 = fully warm) --
-        the "sunlight actually coming through stained glass" experiment,
-        since real backlit glass reads warm, not like a flat torch.
-      - a REFLECTION: back to one soft, restrained pair of diagonal
-        catch-light streaks across the WHOLE window (v6 tried this per
-        individual glass pane instead; reverted per feedback -- "I'm not
-        sure i like the per panel illumination... revert back to the
-        subtle pan-avatar reflection, only subtle"). `reflect_strength`
-        defaults noticeably lower than the old v5.1 `light_strength`
-        default (0.28) that this was conflated with -- the streak itself
-        should be a much quieter accent than the backlight glow now doing
-        the "more glass" work.
-
-    These avatars render small (a seat-circle thumbnail, a role-card
-    portrait), so all three stay deliberately restrained by default. Also
-    worth knowing: the source paintings' black leading/fill don't always
-    have fully closed borders (small gaps here and there) -- `fill_gaps`
-    inpaints the ones it can detect, but a strong global effect can still
-    make a missed hairline gap read as a light leak, which is one more
-    reason these stay gentle rather than cranked up.
-
-    v7 fixes a real bug reported from the live app: wherever the backlight
-    glow or a reflection streak crossed the black leading, it lightened the
-    came right along with the glass -- on the worst-placed lines this washed
-    a properly black line out to a visibly grey one ("the lines... can
-    become very gray due to the light reflection"). The came already has its
-    own deliberate, narrow pewter ridge-highlight (drawn earlier, in
-    `stained_glass()`) to catch light -- it doesn't also need the broad
-    per-window glow pushing it toward white/gold. `is_line` lets this
-    function heavily discount (not fully zero, so the ridge highlight can
-    still peek through) both the backlight and reflection blends wherever
-    the pixel is leading, via `line_light_guard` (0..1, how much to cut the
-    effect there -- default 0.88 means leading gets ~12% of the normal
-    lightening).
+    v7 fix, still in force: wherever the backlight/reflection crossed the
+    black leading it washed a properly black line out to visible grey.
+    `is_line` heavily discounts (not zeroes -- the came's own dedicated
+    ridge highlight still shows) both blends on leading pixels, via
+    `line_light_guard` (default 0.88 = leading gets ~12% of the lightening).
     """
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     nx, ny = xx / w, yy / h  # 0..1 across the canvas
@@ -427,16 +870,9 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
     vign = np.clip(vign - 0.32, 0, 1)
     shade = 1.0 - depth_strength * vign
 
-    # A broad, soft backlight glow -- as if daylight is actually coming
-    # through the window from behind. Centred a little above middle (most
-    # panes' "sky"/background area).
     bx, by = 0.5, 0.4
     backlight = np.exp(-(((nx - bx) * 1.05) ** 2 + ((ny - by) * 1.2) ** 2) / (2 * 0.30 ** 2))
 
-    # One restrained pair of whole-window diagonal catch-lights (not
-    # per-pane): a primary streak from the upper-left, and a second,
-    # softer one from the lower-right so it doesn't read as a single flat
-    # stripe -- both fading out before they reach the opposite edge.
     d1 = (nx - ny * 0.5) - 0.12
     gloss1 = np.exp(-(d1 ** 2) / (2 * 0.10 ** 2))
     gloss1 *= np.clip(1.2 - ny * 1.3, 0, 1)
@@ -450,33 +886,51 @@ def _finish_glass(rgb, w, h, labels, n, glass_mask, seed=0,
     backlight_color = white * (1 - backlight_warmth) + warm_gold * backlight_warmth
 
     out = rgb * shade[..., None]
-    backlight_amt = np.clip(backlight * light_strength, 0, 0.85)
-    reflect_amt = np.clip(gloss * reflect_strength, 0, 0.85)
+    backlight_amt = np.clip(backlight * light_strength, 0, 0.5)
+    reflect_amt = np.clip(gloss * reflect_strength, 0, 0.5)
     if is_line is not None:
         guard = 1.0 - (is_line.astype(np.float32) * line_light_guard)
         backlight_amt = backlight_amt * guard
         reflect_amt = reflect_amt * guard
     out = out + (backlight_color[None, None, :] - out) * backlight_amt[..., None]
     out = out + (255.0 - out) * reflect_amt[..., None]
+
+    if pane_sparkle_strength > 0:
+        out = _pane_sparkle(out, w, h, labels, n, glass_mask, seed=seed,
+                             strength=pane_sparkle_strength)
+
+    if candle_glint_strength > 0:
+        out = _candle_glint(out, w, h, glass_mask, color=candle_glint_color,
+                             strength=candle_glint_strength)
+
     return np.clip(out, 0, 255)
 
 
+
 def stained_glass(img: Image.Image, strength: str = "medium",
-                   line_gray_max: int = 80, line_chroma_max: int = 26,
-                   line_max_halfwidth: float = 5.0, close_gap_iterations: int = 2,
+                   line_contrast_min: float = 16.0, line_chroma_max: int = 40,
+                   line_max_halfwidth: float = 11.0, close_gap_iterations: int = 0,
+                   bridge_gap_px: float = 8.0,
                    fill_gaps: bool = True, seed: int = 0,
                    border: bool = True, border_seed: int = None,
                    depth: bool = True, depth_strength: float = 0.10,
-                   light_strength: float = 0.28, backlight_warmth: float = 0.35,
-                   reflection: bool = True, reflect_strength: float = 0.12,
+                   light_strength: float = 0.24, backlight_warmth: float = 0.5,
+                   reflection: bool = True, reflect_strength: float = 0.22,
                    mood_strength: float = 1.0,
+                   bevel_strength: float = 0.5,
+                   texture_strength: float = 0.15, texture_warp_px: float = 0.5,
+                   dark_pane_floor: float = 40.0,
+                   pane_sparkle_strength: float = 0.35,
+                   candle_glint_strength: float = 0.0,
+                   candle_glint_color: tuple = (255, 170, 90),
                    return_debug: bool = False):
     p = PRESETS[strength]
     rgb = np.array(img.convert("RGB")).astype(np.float32)
     h, w, _ = rgb.shape
 
-    is_line = find_leading(rgb, line_gray_max, line_chroma_max, line_max_halfwidth,
-                            close_iterations=close_gap_iterations)
+    is_line = find_leading(rgb, line_max_halfwidth=line_max_halfwidth,
+                            line_contrast_min=line_contrast_min, line_chroma_max=line_chroma_max,
+                            close_iterations=close_gap_iterations, bridge_gap_px=bridge_gap_px)
 
     gap_mask = np.zeros(is_line.shape, dtype=bool)
     if fill_gaps:
@@ -523,6 +977,20 @@ def stained_glass(img: Image.Image, strength: str = "medium",
             shadow_tint_strength=0.12 * mood_strength,
         )
 
+    # --- keep dark fills visibly separate from the came: an additive floor,
+    #     since a multiplicative one can never lift a pixel that's already
+    #     near (0,0,0) -- see _lift_dark_panes() ---
+    if dark_pane_floor > 0:
+        panes = _lift_dark_panes(panes, floor=dark_pane_floor)
+
+    # --- actual glass surface: fine dimpled bump + a hair of refractive warp,
+    #     kept off the leading so the ink stays crisp ---
+    if texture_strength > 0:
+        panes = _glass_texture(
+            panes, w, h, exclude_mask=is_line, seed=seed,
+            strength=texture_strength, warp_px=texture_warp_px,
+        )
+
     # --- re-draw the leading: mostly true near-black, with a NARROW neutral
     #     pewter catch-light only right at the came's own ridge, not smeared
     #     across its whole width ---
@@ -532,6 +1000,11 @@ def stained_glass(img: Image.Image, strength: str = "medium",
     came_highlight = np.array([120, 120, 118], dtype=np.float32)  # neutral pewter, not gold/brown
     came_color = came_base[None, None, :] * (1 - ridge[..., None] * p["highlight"]) \
         + came_highlight[None, None, :] * (ridge[..., None] * p["highlight"])
+
+    # --- bevel the came: a rounded metal profile (light-facing highlight,
+    #     shadow on the far side) either side of the ridge above, not instead
+    #     of it ---
+    came_color = _bevel_leading(came_color, is_line, line_dist, strength=bevel_strength)
 
     out = np.where(is_line[..., None], came_color, panes)
     out = np.clip(out, 0, 255).astype(np.float32)
@@ -550,7 +1023,7 @@ def stained_glass(img: Image.Image, strength: str = "medium",
     # is confined to (never the lead lines, never the stone).
     glass_mask = mask & (~is_border) & (~is_line)
 
-    if depth or reflection:
+    if depth or reflection or pane_sparkle_strength > 0 or candle_glint_strength > 0:
         out = _finish_glass(
             out, w, h, labels, n, glass_mask, seed=seed,
             depth_strength=depth_strength if depth else 0.0,
@@ -558,6 +1031,9 @@ def stained_glass(img: Image.Image, strength: str = "medium",
             backlight_warmth=backlight_warmth,
             reflect_strength=reflect_strength if reflection else 0.0,
             is_line=is_line,
+            pane_sparkle_strength=pane_sparkle_strength,
+            candle_glint_strength=candle_glint_strength,
+            candle_glint_color=candle_glint_color,
         )
 
     out = np.clip(out, 0, 255).astype(np.uint8)
@@ -577,15 +1053,41 @@ def main():
     ap.add_argument("--no-gap-fill", action="store_true")
     ap.add_argument("--no-border", action="store_true")
     ap.add_argument("--no-depth", action="store_true")
-    ap.add_argument("--light-strength", type=float, default=0.28)
-    ap.add_argument("--backlight-warmth", type=float, default=0.35)
+    ap.add_argument("--light-strength", type=float, default=0.24)
+    ap.add_argument("--backlight-warmth", type=float, default=0.5)
     ap.add_argument("--no-reflection", action="store_true")
-    ap.add_argument("--reflect-strength", type=float, default=0.12)
-    ap.add_argument("--close-gap-iterations", type=int, default=2,
-                     help="bridges small breaks in the leading network itself; 0 disables")
+    ap.add_argument("--reflect-strength", type=float, default=0.22)
+    ap.add_argument("--close-gap-iterations", type=int, default=0,
+                     help="tiny single-pixel antialiasing touch-up only, off by default -- "
+                          "ndimage.binary_closing turns out to be non-monotonic on these "
+                          "paintings (1-2 iterations can merge MORE than 3-4 do), so there's no "
+                          "small value that's reliably safe; only turn this on for a specific "
+                          "image after checking it actually helps there")
+    ap.add_argument("--bridge-gap-px", type=float, default=8.0,
+                     help="max endpoint-to-endpoint distance (px) to bridge a real break in the "
+                          "ink network; 0 disables")
+    ap.add_argument("--line-contrast-min", type=float, default=16.0,
+                     help="local-contrast threshold (v10 black-hat detector) that tells real ink from its surroundings")
+    ap.add_argument("--line-max-halfwidth", type=float, default=11.0,
+                     help="closing-disk radius (px) that tells real ink from a broad dark fill")
+    ap.add_argument("--pane-sparkle-strength", type=float, default=0.35,
+                     help="per-pane catch-light, 0 disables (see _pane_sparkle)")
     ap.add_argument("--mood-strength", type=float, default=1.0,
                      help="0 = off, 1 = full gothic colour grade (richer saturation, deeper "
                           "shadows, cool shadow tint); can go above 1 for more")
+    ap.add_argument("--bevel-strength", type=float, default=0.5,
+                     help="rounded light/shadow profile on the came, 0 disables")
+    ap.add_argument("--texture-strength", type=float, default=0.15,
+                     help="fine dimpled glass-surface bump, 0 disables")
+    ap.add_argument("--texture-warp-px", type=float, default=0.5,
+                     help="subtle refractive pixel warp inside the glass, 0 disables")
+    ap.add_argument("--dark-pane-floor", type=float, default=40.0,
+                     help="min effective luminance for a pane fill, so dark fills stay visibly "
+                          "apart from the near-black leading instead of fusing with it; 0 disables")
+    ap.add_argument("--candle-glint-strength", type=float, default=0.0,
+                     help="a single small, faint highlight low on the window's left side, "
+                          "tinted toward the candle-glow colour rather than neutral white -- "
+                          "0 (default here) disables; see _candle_glint")
     args = ap.parse_args()
     src = Image.open(args.infile)
     out = stained_glass(src, strength=args.strength, fill_gaps=not args.no_gap_fill,
@@ -595,7 +1097,16 @@ def main():
                          reflection=not args.no_reflection,
                          reflect_strength=args.reflect_strength,
                          close_gap_iterations=args.close_gap_iterations,
-                         mood_strength=args.mood_strength)
+                         bridge_gap_px=args.bridge_gap_px,
+                         line_contrast_min=args.line_contrast_min,
+                         line_max_halfwidth=args.line_max_halfwidth,
+                         mood_strength=args.mood_strength,
+                         bevel_strength=args.bevel_strength,
+                         texture_strength=args.texture_strength,
+                         dark_pane_floor=args.dark_pane_floor,
+                         texture_warp_px=args.texture_warp_px,
+                         pane_sparkle_strength=args.pane_sparkle_strength,
+                         candle_glint_strength=args.candle_glint_strength)
     out.save(args.outfile)
     print(f"saved {args.outfile} ({out.size[0]}x{out.size[1]}, strength={args.strength})")
 

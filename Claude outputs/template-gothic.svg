@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="750" viewBox="0 0 500 750">
+  <!-- ================================================================
+       ALIGNMENT TEMPLATE -- Trouble Brewing altar overlay
+       Canvas: 500 x 750 px (exact final asset size -- same 2:3 box as
+       every avatar portrait). Import this as a guide layer, draw the
+       art on layer(s) above it, then hide/delete this layer and export
+       a transparent PNG at 500x750 (or any multiple of it, e.g.
+       1000x1500 -- just keep the 2:3 ratio) named altar-gothic.png.
+
+       COLOR KEY
+       cyan dashed   = the avatar's gothic-arch clip shape. Anything
+                       outside this line is invisible in the final app
+                       (clipped away) -- fine to draw past it, just
+                       don't rely on anything out there being seen.
+       cyan grid     = 50px reference grid.
+       white/solid   = the stone sill top edge (y=588) and its two
+                       slab bands -- draw the sill so its top surface
+                       sits right on this line; candles stand on it.
+       magenta dashed boxes = candle placement + size, numbered 1-5.
+                       Each box is (candle width) x (candle height),
+                       base resting on the sill line. Draw the wax
+                       body inside the box; the flame is expected to
+                       rise ABOVE the box top (see orange guide).
+       orange dashed circle = rough flame envelope (position + a
+                       sense of scale only, not a hard box).
+       ================================================================ -->
+
+  <!-- transparent-checker backdrop so alpha is easy to judge while tracing -->
+  <defs>
+    <pattern id="checker" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="#2a2a2a"/>
+      <rect width="10" height="10" fill="#3a3a3a"/>
+      <rect x="10" y="10" width="10" height="10" fill="#3a3a3a"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="500" height="750" fill="url(#checker)"/>
+
+  <!-- 50px reference grid -->
+  <g stroke="#00e5ff" stroke-width="0.5" opacity="0.25">
+    <path d="M50,0 V750 M100,0 V750 M150,0 V750 M200,0 V750 M250,0 V750 M300,0 V750 M350,0 V750 M400,0 V750 M450,0 V750" />
+    <path d="M0,50 H500 M0,100 H500 M0,150 H500 M0,200 H500 M0,250 H500 M0,300 H500 M0,350 H500 M0,400 H500 M0,450 H500 M0,500 H500 M0,550 H500 M0,600 H500 M0,650 H500 M0,700 H500" />
+  </g>
+
+  <!-- canvas border -->
+  <rect x="0.5" y="0.5" width="499" height="749" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.5"/>
+
+  <!-- gothic-arch clip outline (avatar's own clip shape, scaled to 500x750) -->
+  <path d="M30,727.5 L30,345 C30,225 150,75 250,30 C350,75 470,225 470,345 L470,727.5 Z"
+        fill="none" stroke="#00e5ff" stroke-width="2" stroke-dasharray="8,6"/>
+  <text x="250" y="18" fill="#00e5ff" font-size="13" text-anchor="middle" font-family="sans-serif">clip boundary (gothic arch) -- outside this is hidden</text>
+
+  <!-- sill: top line + two slab bands, matching draw_sill() exactly -->
+  <rect x="4" y="614" width="492" height="156" fill="#c6ba9e" opacity="0.30" stroke="#ffffff" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="14" y="588" width="472" height="34" fill="#c6ba9e" opacity="0.45" stroke="#ffffff" stroke-width="1.5"/>
+  <line x1="0" y1="588" x2="500" y2="588" stroke="#ffffff" stroke-width="1.5"/>
+  <text x="494" y="583" fill="#ffffff" font-size="12" text-anchor="end" font-family="sans-serif">sill top, y=588</text>
+
+  <!-- candle placement boxes: (cx, height, width) -->
+  <!-- 1: cx=70 h=150 w=15 -->
+  <rect x="62.5" y="444" width="15" height="150" fill="none" stroke="#ff2bd6" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="70" cy="390" r="24" fill="none" stroke="#ff9800" stroke-width="1.2" stroke-dasharray="3,3"/>
+  <text x="70" y="435" fill="#ff2bd6" font-size="11" text-anchor="middle" font-family="sans-serif">1</text>
+
+  <!-- 2: cx=150 h=210 w=17 -->
+  <rect x="141.5" y="384" width="17" height="210" fill="none" stroke="#ff2bd6" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="150" cy="308" r="26" fill="none" stroke="#ff9800" stroke-width="1.2" stroke-dasharray="3,3"/>
+  <text x="150" y="375" fill="#ff2bd6" font-size="11" text-anchor="middle" font-family="sans-serif">2</text>
+
+  <!-- 3: cx=250 h=260 w=20 (tallest, centre) -->
+  <rect x="240" y="334" width="20" height="260" fill="none" stroke="#ff2bd6" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="250" cy="240" r="30" fill="none" stroke="#ff9800" stroke-width="1.2" stroke-dasharray="3,3"/>
+  <text x="250" y="325" fill="#ff2bd6" font-size="11" text-anchor="middle" font-family="sans-serif">3</text>
+
+  <!-- 4: cx=340 h=195 w=16 -->
+  <rect x="332" y="399" width="16" height="195" fill="none" stroke="#ff2bd6" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="340" cy="329" r="25" fill="none" stroke="#ff9800" stroke-width="1.2" stroke-dasharray="3,3"/>
+  <text x="340" y="390" fill="#ff2bd6" font-size="11" text-anchor="middle" font-family="sans-serif">4</text>
+
+  <!-- 5: cx=420 h=160 w=15 -->
+  <rect x="412.5" y="434" width="15" height="160" fill="none" stroke="#ff2bd6" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <circle cx="420" cy="376" r="24" fill="none" stroke="#ff9800" stroke-width="1.2" stroke-dasharray="3,3"/>
+  <text x="420" y="425" fill="#ff2bd6" font-size="11" text-anchor="middle" font-family="sans-serif">5</text>
+
+  <text x="250" y="742" fill="#ffffff" font-size="12" text-anchor="middle" font-family="sans-serif" opacity="0.8">Trouble Brewing -- 5 warm beeswax church candles, no skull</text>
+</svg>

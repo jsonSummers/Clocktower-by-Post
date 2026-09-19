@@ -3,6 +3,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import GothicDefs from '$lib/components/GothicDefs.svelte';
 	import { onMount } from 'svelte';
+	import { setTextureMode } from '$lib/textureVars';
 
 	let { children } = $props();
 
@@ -21,6 +22,7 @@
 
 	$effect(() => {
 		document.documentElement.dataset.theme = night ? 'night' : 'day';
+		setTextureMode(night ? 'night' : 'day');
 		try {
 			localStorage.setItem('cbp-theme', night ? 'night' : 'day');
 		} catch {

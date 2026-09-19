@@ -46,6 +46,7 @@ drop function if exists start_voting(uuid)   cascade;
 drop function if exists cast_vote(uuid)      cascade;
 drop function if exists retract_vote(uuid)   cascade;
 drop function if exists close_nomination(uuid) cascade;
+drop function if exists resolve_virgin(uuid) cascade;
 
 -- ---- tables --------------------------------------------------------------
 
@@ -598,6 +599,62 @@ begin
 	select game_id, cycle, 'vote', jsonb_build_object(
 		'nomination_id', id,
 		'votes', (select count(*) from votes where nomination_id = p_nomination_id)
+	)
+	from nominations where id = p_nomination_id;
+end;
+$$;
+
+-- The Virgin's ability: the first time she's nominated, if the nominator is
+-- a Townsfolk, the nominator is executed instead and this nomination ends
+-- with no debate/vote. Mirrors close_nomination's shape (storyteller-only,
+-- SECURITY DEFINER); checkVirgin() in src/lib/scripts/virgin.ts is the
+-- read-only check the Storyteller's screen uses to decide when to offer this
+-- button -- the actual firing is still their explicit click, same as every
+-- other ruling in this app.
+create function resolve_virgin(p_nomination_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+	v_game_id           uuid;
+	v_nominee_seat_id   uuid;
+	v_nominator_seat_id uuid;
+	v_nominee_character text;
+begin
+	select game_id, nominee_seat_id, nominator_seat_id
+	  into v_game_id, v_nominee_seat_id, v_nominator_seat_id
+	  from nominations where id = p_nomination_id;
+
+	if v_game_id is null or not is_storyteller(v_game_id) then
+		raise exception 'not allowed';
+	end if;
+	if v_nominator_seat_id is null then
+		raise exception 'this nomination has no recorded nominator';
+	end if;
+
+	select character_id into v_nominee_character
+	  from seat_roles where game_id = v_game_id and seat_id = v_nominee_seat_id;
+	if v_nominee_character is distinct from 'virgin' then
+		raise exception 'the nominee is not the Virgin';
+	end if;
+
+	if exists (
+		select 1 from nominations
+		where nominee_seat_id = v_nominee_seat_id and id <> p_nomination_id
+	) then
+		raise exception 'the Virgin has already been nominated before -- this only fires once';
+	end if;
+
+	update seats set alive = false, ghost_vote_available = true
+	where id = v_nominator_seat_id;
+
+	update nominations set stage = 'closed', resolved_at = now()
+	where id = p_nomination_id;
+
+	insert into day_log (game_id, cycle, kind, payload)
+	select game_id, cycle, 'virgin', jsonb_build_object(
+		'nomination_id', id,
+		'nominee_seat_id', nominee_seat_id,
+		'nominator_seat_id', nominator_seat_id
 	)
 	from nominations where id = p_nomination_id;
 end;

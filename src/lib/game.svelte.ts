@@ -25,6 +25,7 @@ export type RealtimeStatus = 'connecting' | 'live' | 'reconnecting' | 'polling';
 
 /** Signatures of last-seen data per table, used to detect real changes cheaply. */
 type DataSig = {
+	game: string;
 	seats: string;
 	roles: string;
 	meet: string;
@@ -83,6 +84,7 @@ export class GameSession {
 	#stopped = false;
 
 	#sig: DataSig = {
+		game: '',
 		seats: '',
 		roles: '',
 		meet: '',
@@ -270,6 +272,7 @@ export class GameSession {
 
 	async refreshAll() {
 		await Promise.all([
+			this.refreshGame(),
 			this.refreshSeats(),
 			this.refreshRoles(),
 			this.refreshMeet(),
@@ -287,6 +290,17 @@ export class GameSession {
 		this.#sig[key] = sig;
 		apply();
 		this.lastChangeAt = Date.now();
+	}
+
+	/** Re-fetches the games row itself. Without this, a phase/timer change
+	 * made by another device is only ever seen via the realtime channel's
+	 * postgres_changes event on `games` -- and that channel is known to go
+	 * quiet without erroring (see the class doc above), which otherwise
+	 * leaves every open screen stuck showing the phase it started on. This
+	 * is what actually bounds that staleness to POLL_INTERVAL_MS. */
+	async refreshGame() {
+		const { data } = await this.#client.from('games').select('*').eq('id', this.#gameId).single();
+		if (data) this.#applyIfChanged('game', data, () => (this.game = data as GameRow));
 	}
 
 	async refreshSeats() {

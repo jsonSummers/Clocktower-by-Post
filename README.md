@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Clocktower by Post
 
 An async companion app for **Blood on the Clock Tower**, built for playing across a
@@ -24,6 +23,9 @@ Design brief: [`design/brief.html`](design/brief.html) · [published version](ht
 | Circle / neighbours logic | [`src/lib/circle.ts`](src/lib/circle.ts) | done + 12 unit tests |
 | Team composition table (5–15) | [`src/lib/scripts/composition.ts`](src/lib/scripts/composition.ts) | done |
 | Trouble Brewing script data | [`src/lib/scripts/trouble-brewing.ts`](src/lib/scripts/trouble-brewing.ts) | first pass — night order needs verifying |
+| Laissez un Faire script data | [`src/lib/scripts/laissez-un-faire.ts`](src/lib/scripts/laissez-un-faire.ts) | first pass — night order and a few abilities (Cannibal, Lunatic, Leviathan's win condition) are Storyteller-run/manual by design, see the file's own header |
+| Per-script visual theme (gothic / Victorian-occult) | [`src/lib/scriptTheme.ts`](src/lib/scriptTheme.ts), [`src/app.css`](src/app.css) | done — Trouble Brewing keeps the pale monastery/night-vigil theme, Laissez un Faire gets a Lovecraftian "old leather book" theme (deep leather/damask, cult-sigil iconography, small tarnished-brass accents); textures via [`scripts/make_lovecraft_textures.py`](scripts/make_lovecraft_textures.py) |
+| Shared Gothic-arch clip, per-script decoration (warding sigil; hand-painted candle/skull altar overlay at every size) | [`src/lib/eldritchFrame.ts`](src/lib/eldritchFrame.ts), [`src/lib/candleDeco.ts`](src/lib/candleDeco.ts) | done, decoration only — no Laissez un Faire character art painted yet |
 | Database schema + RLS + RPCs | [`db/schema.sql`](db/schema.sql) | done, running on a project |
 | Live game session | [`src/lib/game.svelte.ts`](src/lib/game.svelte.ts) | game + seats + roles + meet requests over realtime |
 | Landing / Storyteller / Player screens | `src/routes/` | done for this stage |
@@ -38,8 +40,24 @@ Storyteller can **remove someone from a seat** or **reorder the circle**
 (`leave_seat` / `kick_seat` / `move_seat` RPCs in `db/schema.sql`). Character
 portraits have a frame (a shared gothic-arch clip shape, `Avatar.svelte`) and a
 placeholder candle glyph, ready for hand-painted art — see
-[`docs/avatars.md`](docs/avatars.md). Still to come: **night dispatch** (the big
-one), day log, private notes.
+[`docs/avatars.md`](docs/avatars.md). Both scripts clip through the same Gothic
+arch; the page's colours/textures and the frame's *decoration* switch per script
+instead -- every avatar, at every size, now gets a small altar overlay painted
+from Mickey's own art (`design/candles.png`, `design/skull.png`, processed by
+[`scripts/process_altar_art.py`](scripts/process_altar_art.py) into
+`static/textures/candle-church.png` / `candle-lovecraft.png` / `skull.png`),
+standing on a short, window-wide brick altar shelf
+([`scripts/make_altar_brick.py`](scripts/make_altar_brick.py) →
+`static/textures/altar-brick*.jpg`, one brick-bond palette per script/day-night
+combination). Trouble Brewing games get the warm-flame candles bottom-left, with
+an animated translucent orange glow behind the flames; Laissez un Faire games
+get the same candle art recoloured to a lighter charcoal wax with a blue flame
+(and a matching blue glow) bottom-left, plus a skull bottom-right, alongside the
+Lovecraftian old-leather-book look and the warding sigil at the arch's keystone
+(`src/lib/scriptTheme.ts`, `src/lib/eldritchFrame.ts`, `src/lib/candleDeco.ts`).
+Laissez un Faire portraits can go straight onto the same plain 1000x1500px
+template once painted, no new plumbing needed. Still to come: day log, private
+notes.
 
 **Needs a Supabase project** (next section) — without one the app loads but shows
 a "not configured" banner.
@@ -200,7 +218,3 @@ Push to a GitHub repo, import it at <https://vercel.com>, add the two
 `PUBLIC_SUPABASE_*` environment variables in the Vercel project settings. Every
 push then deploys. The app is a PWA, so on a phone it installs to the home
 screen from the browser's share menu.
-=======
-# Clocktower-by-Post
-Blood on the Clocktower app for semi-remote playing
->>>>>>> 49f712b798afa25814c04b2b2e4d572facb5934d

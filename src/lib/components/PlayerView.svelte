@@ -2,6 +2,7 @@
 	import { serverTimeSynced } from '$lib/server-time';
 	import { GameSession } from '$lib/game.svelte';
 	import { getScript, getCharacter } from '$lib/scripts';
+	import { applyScriptTheme } from '$lib/scriptTheme';
 	import { voteState } from '$lib/scripts/winCondition';
 	import { requestMeet, leaveSeat, submitNightChoice, castVote, retractVote } from '$lib/actions';
 	import Circle from './Circle.svelte';
@@ -17,6 +18,7 @@
 
 	let infoOpen = $state(false);
 	let meetReason = $state('');
+	let amnesiacGuess = $state('');
 	let lastGather = $state(false);
 	let actionError = $state<string | null>(null);
 	let confirmingLeave = $state(false);
@@ -26,6 +28,12 @@
 	let newNightInfoTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const script = $derived(session.game ? getScript(session.game.script_id) : undefined);
+	// Steampunk theme for Laissez un Faire, gothic for everything else --
+	// see src/lib/scriptTheme.ts. Also applied by the dev-page simulator's
+	// own top-level effect when this is rendered as a bot's screen there;
+	// both compute the same value from the same script_id, so it's a
+	// harmless no-op overlap, not a conflict.
+	$effect(() => applyScriptTheme(session.game?.script_id));
 	const roleChar = $derived(
 		script && session.myRole ? getCharacter(script, session.myRole) : undefined
 	);
@@ -37,7 +45,19 @@
 		return (isFirst ? roleChar.firstNight : roleChar.otherNight) != null;
 	});
 	const maxChoice = $derived(roleChar?.prompt.kind === 'choose' ? roleChar.prompt.count : 1);
-	const choiceSeatIds = $derived((nightRow?.choices as string[] | null) ?? []);
+	/** night_actions.choices is stored as { ids, teammateIds } for choose-type
+	 * prompts (see askNightChoice() in actions.ts) — teammateIds are seats the
+	 * Storyteller has flagged as this player's known fellow evil team members,
+	 * so e.g. the Imp doesn't accidentally pick their own Poisoner. Falls back
+	 * to treating a bare array (older rows) as no-teammate-info. */
+	const storedChoices = $derived.by(() => {
+		const raw = nightRow?.choices as { ids?: string[]; teammateIds?: string[] } | string[] | null;
+		if (!raw) return { ids: [] as string[], teammateIds: [] as string[] };
+		if (Array.isArray(raw)) return { ids: raw, teammateIds: [] as string[] };
+		return { ids: raw.ids ?? [], teammateIds: raw.teammateIds ?? [] };
+	});
+	const choiceSeatIds = $derived(storedChoices.ids);
+	const teammateSeatIdSet = $derived(new Set(storedChoices.teammateIds));
 	const chosenSeatIds = $derived.by(() => {
 		if (!nightRow?.result) return null;
 		try {
@@ -191,6 +211,34 @@
 		else meetReason = '';
 	}
 
+	/** Savant/Fisherman/Artist/Amnesiac's "privately ask the Storyteller"
+	 * abilities (Character.dayAsk) reuse this same meet-request queue,
+	 * tagged so the Storyteller's Requests panel can recognise and prep for
+	 * them — see dayAsk.ts. The actual exchange happens face to face; this
+	 * just flags that the player is waiting and, for the Amnesiac, carries
+	 * their typed guess along. */
+	async function askDayAsk(tag: string, extra?: string) {
+		if (!session.mySeat) return;
+		actionError = null;
+		const reason = extra?.trim() ? `${tag} ${extra.trim()}` : `${tag} wants to talk privately`;
+		const { error } = await requestMeet(session.client, gameId, session.mySeat.id, reason);
+		if (error) actionError = error.message;
+		else amnesiacGuess = '';
+	}
+
+	function dayAskGuidance(kind: string): string {
+		switch (kind) {
+			case 'savant':
+				return 'Walk over any time to privately hear one true and one false statement, unmarked.';
+			case 'fisherman':
+				return 'Once per game: walk over to privately ask for advice on how to help your team win.';
+			case 'artist':
+				return 'Once per game: walk over to privately ask any yes/no question.';
+			default:
+				return 'Walk over to the Storyteller privately.';
+		}
+	}
+
 	function clickLeave() {
 		if (!confirmingLeave) {
 			confirmingLeave = true;
@@ -314,16 +362,26 @@
 								>
 							</p>
 						{:else}
+							<p class="muted" style="margin:0;font-size:0.8rem">
+								Choosing as the <strong>{roleChar.name}</strong>
+							</p>
 							<p style="margin:0">{nightRow.prompt}</p>
+							{#if teammateSeatIdSet.size}
+								<p class="muted teammate-hint" style="margin:0">
+									🤝 marks seats you already know are your fellow evil team — pick carefully.
+								</p>
+							{/if}
 							<div class="choice-grid">
 								{#each choiceSeatIds as id (id)}
 									{@const s = session.seats.find((x) => x.id === id)}
+									{@const isTeammate = teammateSeatIdSet.has(id)}
 									<button
 										class="choice-seat"
 										class:selected={selectedSeatIds.includes(id)}
+										class:teammate={isTeammate}
 										onclick={() => toggleChoice(id)}
 									>
-										{s?.name ?? '?'}
+										{s?.name ?? '?'}{#if isTeammate}<span class="teammate-badge" title="Your fellow evil teammate">🤝</span>{/if}
 									</button>
 								{/each}
 							</div>
@@ -349,6 +407,37 @@
 					{/if}
 				</p>
 			</section>
+
+			{#if roleChar?.dayAsk && !myOpenRequest}
+				{@const dayAsk = roleChar.dayAsk}
+				{@const tag = `[${roleChar.name}]`}
+				{@const usedOnce =
+					'oncePerGame' in dayAsk &&
+					dayAsk.oncePerGame &&
+					session.meetRequests.some(
+						(r) => r.seat_id === session.mySeat!.id && (r.reason ?? '').startsWith(tag)
+					)}
+				<section class="card stack">
+					{#if usedOnce}
+						<p class="muted" style="margin:0">
+							You've already used your {roleChar.name} ability this game.
+						</p>
+					{:else if dayAsk.kind === 'amnesiac'}
+						<label for="amnguess">Guess your ability</label>
+						<input
+							id="amnguess"
+							bind:value={amnesiacGuess}
+							placeholder="What do you think your ability is?"
+						/>
+						<button disabled={!amnesiacGuess.trim()} onclick={() => askDayAsk(tag, amnesiacGuess)}>
+							Ask the Storyteller
+						</button>
+					{:else}
+						<p class="muted" style="margin:0">{dayAskGuidance(dayAsk.kind)}</p>
+						<button onclick={() => askDayAsk(tag)}>Ask the Storyteller privately</button>
+					{/if}
+				</section>
+			{/if}
 
 			<section class="card stack">
 				{#if myOpenRequest}
@@ -419,6 +508,15 @@
 	.choice-seat.selected {
 		border-color: var(--accent);
 		background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+	}
+	.choice-seat.teammate {
+		border-color: var(--danger);
+	}
+	.teammate-badge {
+		margin-left: 0.3rem;
+	}
+	.teammate-hint {
+		font-size: 0.78rem;
 	}
 	.gather {
 		border-color: var(--danger);

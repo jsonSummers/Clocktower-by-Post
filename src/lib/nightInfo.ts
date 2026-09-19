@@ -270,6 +270,41 @@ export function undertakerCandidates(ctx: NightContext, executedCharacterId: str
 	return out;
 }
 
+/**
+ * Each night: shows a player of a different character TYPE than whoever was
+ * shown last night (Balloonist). The app doesn't persist which type was
+ * shown on a previous night (that would need a structured history alongside
+ * the free-text info the Storyteller actually sends, which they're free to
+ * edit) — so this always proposes a fresh random living seat and leaves the
+ * "different type than last time" check to the Storyteller's own notes,
+ * same spirit as the Undertaker's day-log gap noted above.
+ */
+export function balloonistCandidates(ctx: NightContext): InfoCandidate[] {
+	const alive = ctx.seats.filter((s) => s.id !== ctx.askingSeatId);
+	if (!alive.length) {
+		return [
+			{
+				label: 'Neutral',
+				text: 'No other players are seated to show.',
+				rationale: 'Not enough seated players.',
+				truthful: true
+			}
+		];
+	}
+	const rng = seeded(`${ctx.night}:${ctx.askingSeatId}:balloonist:${ctx.variant ?? 0}`);
+	const seat = pickOne(alive, rng)!;
+	return [
+		{
+			label: 'Neutral',
+			text: `You are shown ${seatLabel(seat)}.`,
+			rationale:
+				"Must be a different character type than whoever was shown last night — the app doesn't track that across nights, so check your own notes before sending. Shuffle for another random pick.",
+			truthful: true,
+			seatIds: [seat.id]
+		}
+	];
+}
+
 /** Dispatches on the character's declared prompt kind — the thing to extend when a new script adds an info role. */
 export function infoCandidatesFor(
 	ctx: NightContext,
@@ -286,6 +321,7 @@ export function infoCandidatesFor(
 		if (character.prompt.compute === 'chef') return chefCandidates(ctx);
 		if (character.prompt.compute === 'empath') return empathCandidates(ctx);
 		if (character.prompt.compute === 'undertaker') return undertakerCandidates(ctx, opts?.executedCharacterId ?? null);
+		if (character.prompt.compute === 'balloonist') return balloonistCandidates(ctx);
 	}
 	return null;
 }
@@ -314,6 +350,10 @@ export interface EvilRevealStep {
  */
 export function night1EvilReveals(ctx: NightContext): EvilRevealStep[] {
 	if (ctx.night !== 1) return [];
+	// Most scripts have the evil team wake together on Night 1 to learn each
+	// other; some Teensyville scripts (Laissez un Faire) explicitly don't —
+	// see the Script.evilTeamKnowsEachOther doc comment in types.ts.
+	if (ctx.script.evilTeamKnowsEachOther === false) return [];
 	const dealt: { seat: SeatRow; character: Character }[] = [];
 	for (const seat of ctx.seats) {
 		const cid = ctx.roleOf(seat.id);
@@ -372,17 +412,33 @@ export interface ChoicePrompt {
 	canPickSelf: boolean;
 	/** Seats the player may legally choose among. */
 	validSeatIds: string[];
+	/** Seats within validSeatIds that the asking player already knows are
+	 * fellow evil team members (from Night 1 mutual recognition) — empty for
+	 * a good-aligned asker, who has no such knowledge. Lets the choice UI
+	 * flag them so e.g. the Imp doesn't accidentally kill their own Poisoner,
+	 * or the Poisoner doesn't waste their poison on the Demon. */
+	teammateSeatIds: string[];
 }
 
 export function choicePromptFor(ctx: NightContext, character: Character): ChoicePrompt | null {
 	if (character.prompt.kind !== 'choose') return null;
 	const alive = ctx.seats.filter((s) => s.alive);
 	const pool = character.prompt.canPickSelf ? alive : alive.filter((s) => s.id !== ctx.askingSeatId);
+	// Only an evil asker on a script where evil actually knows each other has
+	// teammates to flag — a good player picking a target (Monk, Fortune
+	// Teller, Ravenkeeper, Butler) never knows who's evil, and on a script
+	// like Laissez un Faire the evil team itself doesn't know each other
+	// either (Script.evilTeamKnowsEachOther: false).
+	const teammateSeatIds =
+		ctx.script.evilTeamKnowsEachOther !== false && isEvilSeat(ctx, ctx.askingSeatId)
+			? pool.filter((s) => isEvilSeat(ctx, s.id)).map((s) => s.id)
+			: [];
 	return {
 		ability: character.summary,
 		count: character.prompt.count,
 		canPickSelf: character.prompt.canPickSelf,
-		validSeatIds: pool.map((s) => s.id)
+		validSeatIds: pool.map((s) => s.id),
+		teammateSeatIds
 	};
 }
 
@@ -436,10 +492,11 @@ export function wakeOrder(
 	const steps: WakeStep[] = [];
 	const included = new Set<string>();
 
-	if (night === 1) {
+	if (night === 1 && script.evilTeamKnowsEachOther !== false) {
 		// The evil team recognises each other first, even characters that are
 		// otherwise fully passive and never get a firstNight entry at all
-		// (Scarlet Woman, Baron) — see night1EvilReveals().
+		// (Scarlet Woman, Baron) — see night1EvilReveals(). Skipped entirely
+		// for a script that opts out (Script.evilTeamKnowsEachOther: false).
 		const evilFirst = script.characters
 			.filter((c) => (c.team === 'demon' || c.team === 'minion') && bySeat.has(c.id))
 			.sort((a, b) => (a.team === 'demon' ? 0 : 1) - (b.team === 'demon' ? 0 : 1));

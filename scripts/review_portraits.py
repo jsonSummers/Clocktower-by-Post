@@ -19,12 +19,25 @@ dict any time a new painting's filename doesn't obviously match its id).
 The character roster itself is parsed straight out of
 src/lib/scripts/trouble-brewing.ts, so adding a new character there is
 picked up automatically next run — nothing to update in this file for that.
+
+A note on the save step: it writes to a temp file next to the destination
+and only then replaces the destination (os.replace) rather than opening
+the existing portraits-review.png directly in truncate mode. That's not
+just defensive tidiness — review_portraits.ps1/.sh end by opening the
+output in your default image viewer, and if that viewer (Photos, an
+Explorer preview pane, etc.) still has the previous run's file open when
+you run this again, a direct open(path, "w+b") over it is exactly the kind
+of thing that raises OSError: [Errno 22] Invalid argument on Windows.
+os.replace swaps the file at the filesystem level instead, which works
+even while something else still has the old file open for reading.
 """
 from __future__ import annotations  # keeps `Path | None` etc. working on Python < 3.10
 
 import argparse
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -43,7 +56,10 @@ SOURCE_OVERRIDES = {
     "ravenkeeper": "ravenskeeper.png",  # source file is misspelled on disk
 }
 
-# Files in design/ that are never a portrait source.
+# Files in design/ that are never a portrait source. This script's own
+# output filename is added to this set at runtime (see main()) so a re-run
+# never risks fuzzy-matching a previous portraits-review.png as some
+# character's source painting.
 IGNORE_NAMES = {"avatar-template.png"}
 IGNORE_SUFFIXES = {"~"}
 
@@ -140,8 +156,12 @@ def make_cell(char: dict, source: Path | None, effect_kwargs: dict) -> Image.Ima
 
     if source is not None:
         try:
-            raw = Image.open(source)
-            avatar = stained_glass(raw, **effect_kwargs)
+            # Context-managed so the source file's handle is released as
+            # soon as we're done with it, rather than lingering open for
+            # the rest of the run — one fewer thing that could interact
+            # badly with anything else touching design/ mid-run.
+            with Image.open(source) as raw:
+                avatar = stained_glass(raw, **effect_kwargs)
             avatar.thumbnail((CELL_W - 2 * PAD, CELL_W - 2 * PAD), Image.LANCZOS)
             x = (CELL_W - avatar.width) // 2
             y = (CELL_W - avatar.height) // 2 - 6
@@ -170,6 +190,22 @@ def make_cell(char: dict, source: Path | None, effect_kwargs: dict) -> Image.Ima
     return cell
 
 
+def save_atomic(image: Image.Image, out_path: Path) -> None:
+    """Write to a temp file in the same directory, then replace the
+    destination — see the module docstring for why direct open()+save()
+    over an existing, possibly-still-open file can fail on Windows."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(suffix=out_path.suffix or ".png", dir=str(out_path.parent))
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        image.save(tmp_path)
+        os.replace(tmp_path, out_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=str(DESIGN_DIR / "portraits-review.png"))
@@ -181,19 +217,51 @@ def main():
         help="Limit to one or more teams (repeatable). Default: all teams.",
     )
     ap.add_argument("--strength", choices=["subtle", "medium", "strong"], default="medium")
-    ap.add_argument("--light-strength", type=float, default=0.28)
-    ap.add_argument("--backlight-warmth", type=float, default=0.35)
-    ap.add_argument("--reflect-strength", type=float, default=0.12)
+    ap.add_argument("--light-strength", type=float, default=0.24)
+    ap.add_argument("--backlight-warmth", type=float, default=0.5)
+    ap.add_argument("--reflect-strength", type=float, default=0.12,
+                     help="whole-window diagonal glare streaks -- turned down from 0.22 per "
+                          "Mickey's \"reflection on the portraits turned down\"")
+    ap.add_argument("--close-gap-iterations", type=int, default=0)
+    ap.add_argument("--bridge-gap-px", type=float, default=8.0)
+    ap.add_argument("--line-contrast-min", type=float, default=16.0)
+    ap.add_argument("--line-max-halfwidth", type=float, default=11.0)
+    ap.add_argument("--pane-sparkle-strength", type=float, default=0.35)
+    ap.add_argument("--candle-glint-strength", type=float, default=0.16,
+                     help="a very small extra highlight low on the window's left side, tinted "
+                          "warm gold like the candle overlay that sits just outside the frame "
+                          "there -- Mickey's \"another very small reflection on the panels that "
+                          "reflects the candle light\"; 0 disables")
+    ap.add_argument("--bevel-strength", type=float, default=0.5)
+    ap.add_argument("--texture-strength", type=float, default=0.15)
+    ap.add_argument("--texture-warp-px", type=float, default=0.5)
+    ap.add_argument("--dark-pane-floor", type=float, default=40.0,
+                     help="min effective luminance for a pane fill, so dark fills don't fuse with the leading")
     ap.add_argument("--no-border", action="store_true")
     ap.add_argument("--only-painted", action="store_true", help="Skip characters with no source painting.")
     args = ap.parse_args()
+
+    out_path = Path(args.out)
+    # Never let this script's own output be picked up as a fuzzy-matched
+    # "source" for some character on a later run (see IGNORE_NAMES above).
+    IGNORE_NAMES.add(out_path.name)
 
     effect_kwargs = dict(
         strength=args.strength,
         light_strength=args.light_strength,
         backlight_warmth=args.backlight_warmth,
         reflect_strength=args.reflect_strength,
+        close_gap_iterations=args.close_gap_iterations,
+        bridge_gap_px=args.bridge_gap_px,
+        line_contrast_min=args.line_contrast_min,
+        line_max_halfwidth=args.line_max_halfwidth,
+        pane_sparkle_strength=args.pane_sparkle_strength,
+        bevel_strength=args.bevel_strength,
+        texture_strength=args.texture_strength,
+        texture_warp_px=args.texture_warp_px,
+        dark_pane_floor=args.dark_pane_floor,
         border=not args.no_border,
+        candle_glint_strength=args.candle_glint_strength,
     )
 
     characters = load_characters()
@@ -228,9 +296,7 @@ def main():
         gy = (i // cols) * (CELL_W + LABEL_H)
         grid.paste(cell, (gx, gy))
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    grid.save(out_path)
+    save_atomic(grid, out_path)
     print(f"saved {out_path} — {found}/{len(rows)} portraits found, {len(rows) - found} pending")
     for char, src in rows:
         if not src:

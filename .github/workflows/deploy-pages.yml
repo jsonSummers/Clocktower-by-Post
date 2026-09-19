@@ -1,0 +1,72 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # lets you re-run manually (e.g. after rotating a Quick Tunnel URL)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Empty for a root user page (a repo literally named <owner>.github.io)
+      # or a custom domain. For a project page (this repo, served from
+      # /<repo-name>/) it must be /<repo-name> — computed automatically here.
+      - name: Compute base path
+        id: base
+        run: |
+          if [ "${{ github.event.repository.name }}" = "${{ github.repository_owner }}.github.io" ]; then
+            echo "path=" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=/${{ github.event.repository.name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        env:
+          BASE_PATH: ${{ steps.base.outputs.path }}
+          # Set these as repo secrets: Settings → Secrets and variables →
+          # Actions. For the self-hosted + Cloudflare Quick Tunnel path,
+          # update PUBLIC_SUPABASE_URL to the current tunnel URL and
+          # re-run this workflow (Actions tab → this workflow → Run
+          # workflow) before each event.
+          PUBLIC_SUPABASE_URL: ${{ secrets.PUBLIC_SUPABASE_URL }}
+          PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PUBLIC_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      # GitHub Pages serves 404.html for any unmatched path; this is a
+      # client-routed SPA (adapter-static's fallback), so copying the
+      # fallback shell there means a direct/refreshed deep link (e.g.
+      # /host/ABCD) boots the app instead of hitting a real 404.
+      - run: cp build/index.html build/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
