@@ -61,35 +61,49 @@ function isEvil(ctx: NightContext, seatId: string): boolean {
 }
 
 /**
- * Savant: one true, one false statement, every day, order unspecified. Both
- * candidates below are built from real game state — the "false" one is a
- * genuine lie (the stated team is the opposite of that seat's real team),
- * not a random guess — so plugging either straight in is always legitimate.
+ * Savant: normally one true, one false statement, every day, order
+ * unspecified. When the Savant is poisoned/drunk, real rules let the
+ * Storyteller give any mix — both true, both false, or the normal one-and-
+ * one — since a poisoned Savant's info need not follow the usual rule at
+ * all. `truthCount` picks that mix (defaults to the normal 1); both
+ * statements are still built from real game state (a "false" one is a
+ * genuine lie — the stated team is the opposite of that seat's real team),
+ * so plugging either straight in is always legitimate.
  */
-export function savantPrep(ctx: NightContext, variant = 0): DayAskPrep {
+export function savantPrep(ctx: NightContext, variant = 0, truthCount: 0 | 1 | 2 = 1): DayAskPrep {
 	const alive = ctx.seats.filter((s) => s.alive);
 	const rng = seeded(`${ctx.askingSeatId}:savant:${variant}`);
-	const trueSeat = pickOne(alive, rng);
-	const falseSeat = pickOne(
-		alive.filter((s) => s.id !== trueSeat?.id),
+	const seatA = pickOne(alive, rng);
+	const seatB = pickOne(
+		alive.filter((s) => s.id !== seatA?.id),
 		rng
 	);
+	// Statement 1 is true whenever at least one statement should be (truthCount
+	// 1 or 2); statement 2 is true only when both should be (truthCount 2).
+	// Arbitrary which seat gets which slot when truthCount is 1 — the
+	// Storyteller reads both without saying which is which anyway.
+	const wants: [SeatRow | undefined, boolean][] = [
+		[seatA, truthCount >= 1],
+		[seatB, truthCount >= 2]
+	];
 	const candidates: DayAskCandidate[] = [];
-	if (trueSeat) {
+	wants.forEach(([seat, wantTrue], i) => {
+		if (!seat) return;
+		const evil = isEvil(ctx, seat.id);
+		const claimEvil = wantTrue ? evil : !evil;
 		candidates.push({
-			label: 'True statement',
-			text: `${seatLabel(trueSeat)} is ${isEvil(ctx, trueSeat.id) ? 'evil' : 'good'}.`
+			label: `Statement ${i + 1} (${wantTrue ? 'true' : 'false'})`,
+			text: `${seatLabel(seat)} is ${claimEvil ? 'evil' : 'good'}.`
 		});
-	}
-	if (falseSeat) {
-		candidates.push({
-			label: 'False statement',
-			text: `${seatLabel(falseSeat)} is ${isEvil(ctx, falseSeat.id) ? 'good' : 'evil'}.`
-		});
-	}
+	});
+	const mixNote =
+		truthCount === 1
+			? 'Give exactly one true and one false statement, in either order, without saying which is which.'
+			: truthCount === 2
+				? 'Poisoned/drunk: give two TRUE statements today, without saying so.'
+				: 'Poisoned/drunk: give two FALSE statements today, without saying so.';
 	return {
-		guidance:
-			'Give exactly one true and one false statement, in either order, without saying which is which. Anything true and false is fine — these two are just a ready pair.',
+		guidance: `${mixNote} Anything true/false is fine — these are just a ready pair.`,
 		candidates
 	};
 }

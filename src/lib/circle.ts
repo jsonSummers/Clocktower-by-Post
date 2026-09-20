@@ -49,6 +49,22 @@ export function seatLayout(count: number, radius = 0.5): Array<{ x: number; y: n
 	return out;
 }
 
+/**
+ * Ring distance between two seats, in seats, the short way round (0 for the
+ * same seat, 1 for immediate neighbours, up to floor(n/2) for the seat
+ * furthest around). Ignores alive/dead — used for decoy-proximity choices,
+ * where a dead seat is just as valid a pairing as a living one.
+ */
+export function circleDistance(seats: SeatRow[], seatIdA: string, seatIdB: string): number {
+	const ring = [...seats].sort((a, b) => a.seat_index - b.seat_index);
+	const n = ring.length;
+	const i = ring.findIndex((s) => s.id === seatIdA);
+	const j = ring.findIndex((s) => s.id === seatIdB);
+	if (n === 0 || i === -1 || j === -1) return 0;
+	const raw = Math.abs(i - j);
+	return Math.min(raw, n - raw);
+}
+
 /** Count of pairs of adjacent living seats where both are flagged evil (Chef-style). */
 export function adjacentPairs(seats: SeatRow[], isEvil: (s: SeatRow) => boolean): number {
 	const ring = [...seats].sort((a, b) => a.seat_index - b.seat_index).filter((s) => s.alive);

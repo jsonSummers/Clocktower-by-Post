@@ -18,6 +18,12 @@
 		type AmnesiacAssignment
 	} from '$lib/scripts/amnesiac-abilities';
 	import {
+		encodeCannibalNote,
+		parseCannibalNote,
+		type CannibalAssignment
+	} from '$lib/scripts/cannibal';
+	import { poisonStatus, addToken, removeToken } from '$lib/poison';
+	import {
 		phase as phaseRpc,
 		applyDeal,
 		assignRole,
@@ -37,7 +43,8 @@
 		closeNomination,
 		markExecuted,
 		dismissNomination,
-		resolveVirgin
+		resolveVirgin,
+		setSeatTokens
 	} from '$lib/actions';
 	import type { Team } from '$lib/types';
 	import Circle from '$lib/components/Circle.svelte';
@@ -64,6 +71,11 @@
 	 * "🔁 New options" button in the Requests tab actually reshuffles
 	 * instead of showing the same worked pair every time. */
 	let dayAskVariant = $state<Record<string, number>>({});
+	/** How many of the Savant's two statements should be true today — see
+	 * savantPrep()'s truthCount param. 1 = normal (one true, one false);
+	 * 0 or 2 are for a poisoned/drunk Savant. Keyed by seatId, defaults to
+	 * the normal case. */
+	let savantTruthCount = $state<Record<string, 0 | 1 | 2>>({});
 	/** null = the Night tab shows the real, live night; a number previews
 	 * that night instead (read-only for sending, but "plan ahead" notes can
 	 * still be written — see NightDispatch's prep-notes support). */
@@ -177,6 +189,11 @@
 		return script.characters.find((c) => c.id === id)?.name ?? id;
 	}
 
+	function seatName(seatId: string): string {
+		const seat = session.seats.find((s) => s.id === seatId);
+		return seat?.name || `Seat ${(seat?.seat_index ?? 0) + 1}`;
+	}
+
 	function isDrunk(seatId: string): boolean {
 		return session.grimoire.find((g) => g.seat_id === seatId)?.real_character_id === 'drunk';
 	}
@@ -184,6 +201,14 @@
 	function isRedHerring(seatId: string): boolean {
 		return session.redHerringSeatId === seatId;
 	}
+
+	/** Drunk/red herring are Trouble Brewing-specific mechanics (there's no
+	 * Drunk or Fortune Teller in Laissez un Faire) — hide the "Make Drunk" /
+	 * "Make red herring" controls entirely on a script that doesn't have
+	 * them, rather than showing dead buttons on every seat regardless of
+	 * script ("they are redundant" on the new script). */
+	const scriptHasDrunk = $derived(script?.characters.some((c) => c.id === 'drunk') ?? false);
+	const scriptHasRedHerring = $derived(script?.characters.some((c) => c.redHerring) ?? false);
 
 	/** Everyone this app knows about, for the Amnesiac's "secretly IS another
 	 * character" picker — deliberately not limited to the current script
@@ -265,6 +290,68 @@
 		const trimmed = text.trim();
 		if (!trimmed) return;
 		await saveAmnesiacInfo(seatId, { text: trimmed, mimics: null });
+	}
+
+	function cannibalInfo(seatId: string): CannibalAssignment | null {
+		return parseCannibalNote(session.grimoire.find((g) => g.seat_id === seatId)?.notes);
+	}
+
+	/** The most recently executed player, and whether their true character
+	 * was evil — evil characters are stored truly in seat_roles (there's no
+	 * bluffing data structure; only the Drunk fakes a Townsfolk), so
+	 * roleFor() already gives the Cannibal's honest default meal. Used to
+	 * drive the "inherit ___" prompt on the Cannibal's own seat row. */
+	const lastExecuted = $derived.by(() => {
+		const executed = [...session.nominations]
+			.filter((n) => n.executed)
+			.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+		if (!executed) return null;
+		const seatId = executed.nominee_seat_id;
+		const charId = session.roleFor(seatId);
+		const char = charId ? findCharacterAnywhere(charId) : null;
+		const evil = char?.team === 'minion' || char?.team === 'demon';
+		return { seatId, charId, char, evil };
+	});
+
+	async function saveCannibalInfo(seatId: string, info: CannibalAssignment) {
+		await run(setGrimoireNote(supabase, gameId, seatId, encodeCannibalNote(info)));
+	}
+
+	async function poisonCannibal(seatId: string) {
+		const existing = session.grimoire.find((g) => g.seat_id === seatId)?.tokens;
+		await run(setSeatTokens(supabase, gameId, seatId, addToken(existing, { kind: 'poisoned', source: 'cannibal' })));
+	}
+
+	async function clearCannibalPoison(seatId: string) {
+		const existing = session.grimoire.find((g) => g.seat_id === seatId)?.tokens;
+		await run(setSeatTokens(supabase, gameId, seatId, removeToken(existing, 'poisoned', 'cannibal')));
+	}
+
+	/** Default: inherit the last executed player's true character and true
+	 * ability, exactly as written ("other than that the cannibal should just
+	 * inherit the role"). Poisons automatically when that true character was
+	 * evil, since the Cannibal has then inherited an evil ability even
+	 * though — per the override below — the group may only ever be told the
+	 * bluffed cover story. */
+	async function inheritExecuted(seatId: string) {
+		const le = lastExecuted;
+		if (!le?.charId) return;
+		await saveCannibalInfo(seatId, { inherits: le.charId, poisoned: le.evil });
+		if (le.evil) await poisonCannibal(seatId);
+		else await clearCannibalPoison(seatId);
+	}
+
+	/** Override for "they were bluffing as ___": the executed player was
+	 * secretly a minion (or demon) but the group only ever saw them play a
+	 * good character — the Cannibal should inherit that bluffed identity
+	 * instead of the real evil one, while still being poisoned, since the
+	 * true inherited ability is evil. Restricted to mimicChoices (good,
+	 * non-drunk, non-amnesiac) for the same reason it's used for the
+	 * Amnesiac's mimic picker. */
+	async function bluffOverride(seatId: string, characterId: string) {
+		if (!characterId) return;
+		await saveCannibalInfo(seatId, { inherits: characterId, poisoned: true });
+		await poisonCannibal(seatId);
 	}
 
 	/** Assigns a random not-in-play Townsfolk as this seat's cover story and
@@ -508,45 +595,74 @@
 								Ghost vote: {seat.ghost_vote_available ? 'available' : 'used'}
 							</button>
 						{/if}
-						{#if isDrunk(seat.id)}
+						{@const poison = poisonStatus(seat.id, session.grimoire, session.seats)}
+						{#if poison.poisoned}
 							<div class="row" style="align-items:center;gap:0.4rem">
-								<span class="drunktag">🍺 Drunk — thinks they're the {roleName(seat.id)}</span>
+								<span class="drunktag">🧪 Poisoned — {poison.reason}</span>
 								<button
 									class="ghostvote"
-									onclick={() => run(clearDrunk(supabase, seat.id))}
-									title="Undo — this seat is no longer marked as the Drunk"
+									onclick={() =>
+										run(
+											setSeatTokens(
+												supabase,
+												gameId,
+												seat.id,
+												removeToken(
+													session.grimoire.find((g) => g.seat_id === seat.id)?.tokens,
+													'poisoned',
+													poison.source ?? 'cannibal'
+												)
+											)
+										)}
+									title="Manually clear this poison token"
 								>
 									Clear
 								</button>
 							</div>
-						{:else}
-							<button
-								class="ghostvote"
-								onclick={() => makeDrunk(seat.id)}
-								title="Secretly assign the Drunk: gives them a random not-in-play Townsfolk to think they are"
-							>
-								🍺 Make Drunk
-							</button>
 						{/if}
-						{#if isRedHerring(seat.id)}
-							<div class="row" style="align-items:center;gap:0.4rem">
-								<span class="drunktag">🐟 Fortune Teller's red herring</span>
+						{#if scriptHasDrunk}
+							{#if isDrunk(seat.id)}
+								<div class="row" style="align-items:center;gap:0.4rem">
+									<span class="drunktag">🍺 Drunk — thinks they're the {roleName(seat.id)}</span>
+									<button
+										class="ghostvote"
+										onclick={() => run(clearDrunk(supabase, seat.id))}
+										title="Undo — this seat is no longer marked as the Drunk"
+									>
+										Clear
+									</button>
+								</div>
+							{:else}
 								<button
 									class="ghostvote"
-									onclick={() => run(clearRedHerring(supabase, gameId))}
-									title="Undo — no seat is marked as the red herring"
+									onclick={() => makeDrunk(seat.id)}
+									title="Secretly assign the Drunk: gives them a random not-in-play Townsfolk to think they are"
 								>
-									Clear
+									🍺 Make Drunk
 								</button>
-							</div>
-						{:else}
-							<button
-								class="ghostvote"
-								onclick={() => run(setRedHerring(supabase, gameId, seat.id))}
-								title="The Fortune Teller reads this seat as the Demon even though they aren't — only one seat can hold it"
-							>
-								🐟 Make red herring
-							</button>
+							{/if}
+						{/if}
+						{#if scriptHasRedHerring}
+							{#if isRedHerring(seat.id)}
+								<div class="row" style="align-items:center;gap:0.4rem">
+									<span class="drunktag">🐟 Fortune Teller's red herring</span>
+									<button
+										class="ghostvote"
+										onclick={() => run(clearRedHerring(supabase, gameId))}
+										title="Undo — no seat is marked as the red herring"
+									>
+										Clear
+									</button>
+								</div>
+							{:else}
+								<button
+									class="ghostvote"
+									onclick={() => run(setRedHerring(supabase, gameId, seat.id))}
+									title="The Fortune Teller reads this seat as the Demon even though they aren't — only one seat can hold it"
+								>
+									🐟 Make red herring
+								</button>
+							{/if}
 						{/if}
 						{#if session.roleFor(seat.id) === 'amnesiac'}
 							{@const info = amnesiacInfo(seat.id)}
@@ -598,6 +714,48 @@
 							>
 								Save custom text
 							</button>
+						{/if}
+						{#if session.roleFor(seat.id) === 'cannibal'}
+							{@const info = cannibalInfo(seat.id)}
+							<div class="row" style="align-items:center;gap:0.4rem;flex-wrap:wrap">
+								<span class="drunktag">
+									🍖 Inherited ability:
+									{info ? mimicName(info.inherits) : '— not set yet —'}
+									{#if info?.poisoned}<em>(poisoned — evil inheritance)</em>{/if}
+								</span>
+							</div>
+							{#if lastExecuted}
+								<div class="row" style="flex-wrap:wrap;gap:0.3rem;align-items:center">
+									<span class="muted">
+										Last executed: {seatName(lastExecuted.seatId)} — {lastExecuted.char?.name ??
+											lastExecuted.charId}
+										{#if lastExecuted.evil}<em>(evil — bluffing?)</em>{/if}
+									</span>
+									<button class="ghostvote" onclick={() => inheritExecuted(seat.id)}>
+										Inherit their role
+									</button>
+								</div>
+								{#if lastExecuted.evil}
+									<div class="row" style="flex-wrap:wrap;gap:0.3rem;align-items:center">
+										<select
+											value=""
+											onchange={(e) => {
+												const v = e.currentTarget.value;
+												if (v) bluffOverride(seat.id, v);
+												e.currentTarget.value = '';
+											}}
+											title="The group only ever saw the executed player play this character — the Cannibal inherits the bluffed identity instead of the real evil one, and is still poisoned"
+										>
+											<option value="">— or: they were bluffing as ___ (still poisoned) —</option>
+											{#each mimicChoices as c (c.id)}
+												<option value={c.id}>{c.name}</option>
+											{/each}
+										</select>
+									</div>
+								{/if}
+							{:else}
+								<p class="muted" style="margin:0">No one has been executed yet.</p>
+							{/if}
 						{/if}
 						<select
 							value={session.roleFor(seat.id) ?? ''}
@@ -826,6 +984,29 @@
 							{@const dayAsk = askerChar.dayAsk}
 							<div class="dayask-prep stack" style="gap:0.3rem">
 								{#if dayAsk.kind === 'savant'}
+									{@const savantPoison = poisonStatus(req.seat_id, session.grimoire, session.seats)}
+									{#if savantPoison.poisoned}
+										<p class="muted" style="margin:0;font-size:0.8rem">
+											🧪 {savantPoison.reason} — pick how many statements are true below.
+										</p>
+									{/if}
+									<div class="row" style="align-items:center;gap:0.3rem">
+										<label class="muted" style="font-size:0.8rem" for="savant-truth-{req.seat_id}">
+											True statements:
+										</label>
+										<select
+											id="savant-truth-{req.seat_id}"
+											value={savantTruthCount[req.seat_id] ?? 1}
+											onchange={(e) =>
+												(savantTruthCount[req.seat_id] = Number(
+													e.currentTarget.value
+												) as 0 | 1 | 2)}
+										>
+											<option value={1}>1 (normal)</option>
+											<option value={0}>0 (poisoned/drunk)</option>
+											<option value={2}>2 (poisoned/drunk)</option>
+										</select>
+									</div>
 									{@const prep = savantPrep(
 										{
 											script: script!,
@@ -834,7 +1015,8 @@
 											night: 0,
 											askingSeatId: req.seat_id
 										},
-										dayAskVariant[req.seat_id] ?? 0
+										dayAskVariant[req.seat_id] ?? 0,
+										savantTruthCount[req.seat_id] ?? 1
 									)}
 									<p class="muted" style="margin:0;font-size:0.8rem">{prep.guidance}</p>
 									{#each prep.candidates as c (c.label)}

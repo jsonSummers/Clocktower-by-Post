@@ -30,10 +30,14 @@
 		night1EvilReveals,
 		parseChoiceResult,
 		choicePromptFor,
+		mimicWakeStep,
 		type InfoCandidate,
-		type WakeStep
+		type WakeStep,
+		type ImpactLevel
 	} from '$lib/nightInfo';
 	import { parseAmnesiacNote } from '$lib/scripts/amnesiac-abilities';
+	import { parseCannibalNote } from '$lib/scripts/cannibal';
+	import { poisonStatus, addToken } from '$lib/poison';
 	import {
 		sendNightInfo,
 		askNightChoice,
@@ -41,7 +45,8 @@
 		reopenNightChoice,
 		clearNightAction,
 		savePrepNote,
-		markPrepNoteReleased
+		markPrepNoteReleased,
+		setSeatTokens
 	} from '$lib/actions';
 	import Avatar from './Avatar.svelte';
 
@@ -99,18 +104,8 @@
 			if (!info) continue;
 			if (info.mimics) {
 				const mimicked = findCharacterAnywhere(info.mimics);
-				if (!mimicked) continue;
-				const pos = night <= 1 ? mimicked.firstNight : mimicked.otherNight;
-				if (pos == null) continue; // mimicked character doesn't wake this night either
-				if (mimicked.wakeIfDead && seat.alive) continue; // e.g. mimicking Ravenkeeper while still alive
-				out.push({
-					seat,
-					character: {
-						...mimicked,
-						name: `${mimicked.name} (Amnesiac)`,
-						summary: `Amnesiac, secretly running the ${mimicked.name}: ${mimicked.summary}`
-					}
-				});
+				const step = mimicked ? mimicWakeStep(seat, mimicked, night, 'Amnesiac') : null;
+				if (step) out.push(step);
 			} else if (info.text) {
 				out.push({
 					seat,
@@ -128,9 +123,30 @@
 		}
 		return out;
 	});
+	/** The Cannibal's inherited wake step — see cannibal.ts. Unlike the
+	 * Amnesiac, there's no "custom text" fallback: the Cannibal only ever
+	 * has something to inherit once an execution has actually happened, and
+	 * the assignment is always a real character id (the executed player's
+	 * own, or the bluff character the Storyteller substituted for it). */
+	const cannibalWakes = $derived.by(() => {
+		if (night == null) return [];
+		const out: WakeStep[] = [];
+		for (const seat of session.seats) {
+			if (session.roleFor(seat.id) !== 'cannibal') continue;
+			const info = parseCannibalNote(session.grimoire.find((g) => g.seat_id === seat.id)?.notes);
+			if (!info) continue;
+			const mimicked = findCharacterAnywhere(info.inherits);
+			const step = mimicked ? mimicWakeStep(seat, mimicked, night, 'Cannibal') : null;
+			if (step) out.push(step);
+		}
+		return out;
+	});
 	const steps = $derived.by(() => {
 		if (!script || night == null) return [];
-		const raw = wakeOrder(script, session.seats, (id) => session.roleFor(id), night, amnesiacWakes);
+		const raw = wakeOrder(script, session.seats, (id) => session.roleFor(id), night, [
+			...amnesiacWakes,
+			...cannibalWakes
+		]);
 		// A wakeIfDead character (Ravenkeeper) is otherwise eligible on every
 		// night once dead — cut it off after the first night it actually got
 		// a chance to act, so it doesn't keep re-asking on every later night.
@@ -194,6 +210,10 @@
 	// executed yesterday.
 	let draftText = $state<Record<string, string>>({});
 	let variant = $state<Record<string, number>>({});
+	/** How strong the Storyteller wants a pairing/count candidate to be —
+	 * see nightInfo.ts's ImpactLevel doc comment. Per-seat, defaults to
+	 * 'medium' (this file's original, unparametrised behaviour). */
+	let impactLevel = $state<Record<string, ImpactLevel>>({});
 	let executedFor = $state<Record<string, string>>({});
 	let editing = $state<Record<string, boolean>>({});
 	/** Staged text for the per-seat "plan ahead" note — see prepNoteFor() and
@@ -214,7 +234,8 @@
 			roleOf: (id: string) => session.roleFor(id),
 			night,
 			askingSeatId: seatId,
-			variant: variant[seatId] ?? 0
+			variant: variant[seatId] ?? 0,
+			impactLevel: impactLevel[seatId] ?? 'medium'
 		};
 		const opts =
 			character.prompt.kind === 'info-auto' && character.prompt.compute === 'undertaker'
@@ -225,6 +246,17 @@
 
 	function shuffle(seatId: string) {
 		variant[seatId] = (variant[seatId] ?? 0) + 1;
+	}
+
+	/** Only the pairing roles (Washerwoman/Librarian/Investigator) and the
+	 * two count roles (Chef/Empath) actually read impactLevel — showing the
+	 * selector for Undertaker/Balloonist etc. would just be a dead control. */
+	function usesImpactLevel(character: Character): boolean {
+		if (character.prompt.kind === 'info-preplan') return true;
+		return (
+			character.prompt.kind === 'info-auto' &&
+			(character.prompt.compute === 'chef' || character.prompt.compute === 'empath')
+		);
 	}
 
 	async function send(seatId: string, characterId: string) {
@@ -247,6 +279,15 @@
 		if (night == null) return;
 		const body = (prepDraft[seatId] ?? prepNoteFor(seatId)?.body ?? '').trim();
 		run(savePrepNote(session.client, gameId, night, seatId, body));
+	}
+
+	/** Marks the Widow's chosen victim poisoned — see poison.ts. Re-derived
+	 * live from whether the Widow's own seat is still alive, so there's
+	 * nothing to "clear" when the Widow eventually dies. */
+	async function poisonWidowVictim(victimSeatId: string, widowSeatId: string) {
+		const existing = session.grimoire.find((g) => g.seat_id === victimSeatId)?.tokens;
+		const tokens = addToken(existing, { kind: 'poisoned', source: 'widow', sourceSeatId: widowSeatId });
+		await run(setSeatTokens(session.client, gameId, victimSeatId, tokens));
 	}
 
 	async function ask(
@@ -358,6 +399,14 @@
 					<p class="drunk-warning">
 						🍺 This seat is actually the Drunk, shown as the {step.character.name} — their ability
 						doesn't really work. Anything sent here doesn't need to be true.
+					</p>
+				{/if}
+
+				{@const poison = poisonStatus(step.seat.id, session.grimoire, session.seats)}
+				{#if poison.poisoned}
+					<p class="drunk-warning">
+						🧪 {seatName(step.seat.id)} is {poison.reason} — the "if poisoned" candidates below are
+						fair game.
 					</p>
 				{/if}
 
@@ -508,6 +557,18 @@
 										Send reveal: {targetName}
 									</button>
 								{/if}
+							{:else if step.character.id === 'widow' && parsed}
+								{@const victimId = parsed.picks[0]}
+								{@const victimPoison = victimId ? poisonStatus(victimId, session.grimoire, session.seats) : null}
+								{#if victimId}
+									{#if victimPoison?.poisoned}
+										<p class="muted" style="margin:0">🧪 {seatName(victimId)} is {victimPoison.reason}.</p>
+									{:else}
+										<button class="primary" onclick={() => poisonWidowVictim(victimId, step.seat.id)}>
+											🧪 Poison {seatName(victimId)}
+										</button>
+									{/if}
+								{/if}
 							{/if}
 							<div class="row">
 								<button onclick={() => run(reopenNightChoice(session.client, action.id))}>
@@ -582,6 +643,18 @@
 									{cand.label}
 								</button>
 							{/each}
+							{#if usesImpactLevel(step.character)}
+								<select
+									value={impactLevel[step.seat.id] ?? 'medium'}
+									onchange={(e) =>
+										(impactLevel[step.seat.id] = e.currentTarget.value as ImpactLevel)}
+									title="How strong/actionable this candidate should be — see the ⓘ rationale on each option"
+								>
+									<option value="low">Impact: low</option>
+									<option value="medium">Impact: medium</option>
+									<option value="high">Impact: high</option>
+								</select>
+							{/if}
 							<button onclick={() => shuffle(step.seat.id)} title="Regenerate the decoy/lie candidates">
 								&#x21bb; shuffle
 							</button>

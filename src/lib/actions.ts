@@ -79,6 +79,15 @@ export function clearRedHerring(c: SupabaseClient, gameId: string) {
 	return c.from('grimoire').update({ is_red_herring: false }).eq('game_id', gameId);
 }
 
+/** Storyteller writes a seat's status tokens wholesale (currently just
+ * "poisoned" — see poison.ts). Same upsert-by-seat-id shape as setGrimoireNote;
+ * callers compute the full new token array themselves (poison.ts's
+ * addToken()/removeToken()) since this stays a thin write, same as every
+ * other action here. */
+export function setSeatTokens(c: SupabaseClient, gameId: string, seatId: string, tokens: unknown) {
+	return c.from('grimoire').upsert({ seat_id: seatId, game_id: gameId, tokens });
+}
+
 /**
  * Writes a dealGame() result to the database: replaces every seat_roles row
  * for the game, clears any previous red herring and Drunk marker and sets

@@ -11,6 +11,12 @@
 	} from '$lib/candleDeco';
 	import { frameForCharacter } from '$lib/scriptTheme';
 
+	/** "Forget the candles and the skull on the portrait for now" (2026-09-20
+	 * feedback) -- one flag pauses the whole altar overlay (brick strip +
+	 * candle + skull) without deleting any of the art/positioning work
+	 * behind it, so it's a one-line flip to bring back. */
+	const SHOW_ALTAR_OVERLAY = false;
+
 	interface Props {
 		/** Character id, matching a file at /avatars/<id>.png -- or null/unset for the placeholder. */
 		characterId?: string | null;
@@ -95,6 +101,7 @@
 			(their own "bottom" is ITEM_BOTTOM, a touch less than
 			ALTAR_STRIP_HEIGHT, not 0).
 		-->
+		{#if SHOW_ALTAR_OVERLAY}
 		<span
 			class="altar-strip"
 			style="height: {ALTAR_STRIP_HEIGHT}%; clip-path: polygon({ALTAR_STRIP_TOP_INSET}% 0%, {100 -
@@ -138,6 +145,7 @@
 			>
 				<img class="skull-img" src="/textures/skull.png" alt="" />
 			</span>
+		{/if}
 		{/if}
 	</span>
 </span>

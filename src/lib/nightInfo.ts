@@ -32,15 +32,53 @@
  * Storyteller can ignore all of the above and make up their own wording —
  * the candidates are a head start, never a requirement.
  *
+ * ---- impact level ----
+ * Playtesting feedback: the very first info most seats get (Washerwoman /
+ * Librarian / Investigator pairing, Chef/Empath's exact count) can land as
+ * "too easy" — a pairing or number that's trivially solvable barely uses
+ * the ability at all. There's no published formula for this (checked the
+ * official wiki's Storyteller Advice page and community write-ups on
+ * misinformation/suspicion-shaping — both land on "Storyteller judgement",
+ * not a rating table), so `ImpactLevel` below encodes two ordinary,
+ * commonly-cited ST techniques rather than anything scored from a source:
+ *
+ *   - Pairing roles: how far around the circle the decoy sits from the
+ *     truth-holder. A decoy sitting right next to them concentrates
+ *     suspicion onto a small, already-scrutinised neighbourhood (players
+ *     watch neighbours' behaviour closely) — high impact, easy to act on.
+ *     A decoy from clear across the circle spreads the pairing thin against
+ *     two people players otherwise weren't comparing — low impact, harder
+ *     to leverage. 'medium' is this file's original behaviour: whichever
+ *     decoy the lean (Neutral/Helps good/Helps evil) filter turns up,
+ *     picked without any proximity preference.
+ *   - Chef/Empath's count: the truthful number is always exact — that's the
+ *     ability, not a dial — but the "if poisoned" alternates on offer swing
+ *     by ±1 (medium, unchanged) or ±2 (high, a bolder lie); 'low' drops the
+ *     lie candidates altogether, for a table that would rather not be
+ *     tempted into a big swing off a single poisoned info role.
+ *
+ * Defaults to 'medium' everywhere (NightContext.impactLevel is optional),
+ * so nothing changes unless the Storyteller actually picks a level.
+ *
  * Nothing is ever sent automatically. The Storyteller always clicks (or
  * types) the final wording themselves.
  */
 import type { Character, Script, SeatRow, Team } from './types';
-import { adjacentPairs, livingNeighbours } from './circle';
+import { adjacentPairs, circleDistance, livingNeighbours } from './circle';
 import { getCharacter, nightOrder } from './scripts';
 
 // ---------------------------------------------------------------------------
 // context & small helpers
+
+/**
+ * How strong/actionable a piece of info-role candidate should be — see the
+ * module doc comment above "impact level" for where this came from. Not a
+ * rules concept (Trouble Brewing's own text is fixed); it only steers which
+ * decoy/lie this file proposes, same as the "Helps good/evil" lean already
+ * did before this existed. Defaults to 'medium' (this file's original,
+ * unparametrised behaviour) wherever omitted.
+ */
+export type ImpactLevel = 'low' | 'medium' | 'high';
 
 export interface NightContext {
 	script: Script;
@@ -53,6 +91,8 @@ export interface NightContext {
 	askingSeatId: string;
 	/** Bump this to regenerate candidates ("Shuffle") without changing on every rerender. */
 	variant?: number;
+	/** How strong the Storyteller wants this candidate to be — see ImpactLevel. Defaults to 'medium'. */
+	impactLevel?: ImpactLevel;
 }
 
 const EVIL_TEAMS: Team[] = ['minion', 'demon'];
@@ -148,8 +188,21 @@ function preplanCandidates(ctx: NightContext, wantTeam: Team, noneText: string):
 		const truthSeat = pickOne(holders, rng)!;
 		const charName = getCharacter(ctx.script, ctx.roleOf(truthSeat.id)!)?.name ?? '?';
 		const pool = ctx.seats.filter((s) => s.id !== ctx.askingSeatId && s.id !== truthSeat.id);
-		const preferred = pool.filter(decoyFilter);
-		const decoy = pickOne(preferred.length ? preferred : pool, rng);
+		let decoyPool = pool.filter(decoyFilter);
+		if (!decoyPool.length) decoyPool = pool;
+		// impactLevel narrows the pool by ring distance from the truth seat —
+		// see the module doc comment's "impact level" section. 'medium' (the
+		// default) skips this and keeps the original random pick from whatever
+		// the lean filter above already turned up.
+		const impact = ctx.impactLevel ?? 'medium';
+		if (impact !== 'medium' && decoyPool.length > 1) {
+			const byDistance = decoyPool
+				.map((s) => ({ s, d: circleDistance(ctx.seats, truthSeat.id, s.id) }))
+				.sort((a, b) => (impact === 'high' ? a.d - b.d : b.d - a.d));
+			const bestD = byDistance[0].d;
+			decoyPool = byDistance.filter((x) => x.d === bestD).map((x) => x.s);
+		}
+		const decoy = pickOne(decoyPool, rng);
 		if (!decoy) {
 			return {
 				label,
@@ -185,20 +238,30 @@ function preplanCandidates(ctx: NightContext, wantTeam: Team, noneText: string):
 	];
 }
 
-function numberCandidates(trueN: number, phrase: (n: number) => string): InfoCandidate[] {
-	const lower = Math.max(0, trueN - 1);
-	const higher = trueN + 1;
+function numberCandidates(
+	trueN: number,
+	phrase: (n: number) => string,
+	impact: ImpactLevel = 'medium'
+): InfoCandidate[] {
+	const neutral: InfoCandidate = { label: 'Neutral', text: phrase(trueN), rationale: 'The real count.', truthful: true };
+	// 'low' impact: no lie candidates at all — see the module doc comment's
+	// "impact level" section. The truthful count itself is never adjusted;
+	// the ability's real number is fixed by the rules, not a dial.
+	if (impact === 'low') return [neutral];
+	const delta = impact === 'high' ? 2 : 1;
+	const lower = Math.max(0, trueN - delta);
+	const higher = trueN + delta;
 	return [
-		{ label: 'Neutral', text: phrase(trueN), rationale: 'The real count.', truthful: true },
+		neutral,
 		{
-			label: 'Helps evil team (if poisoned)',
+			label: `Helps evil team (if poisoned, -${delta})`,
 			text: phrase(lower),
 			rationale:
 				'Only send this if the player is actually poisoned or the Drunk this night — understates evil, so it tends to help evil feel safer.',
 			truthful: false
 		},
 		{
-			label: 'Helps good team (if poisoned)',
+			label: `Helps good team (if poisoned, +${delta})`,
 			text: phrase(higher),
 			rationale:
 				'Only send this if the player is actually poisoned or the Drunk this night — overstates evil, so it tends to add pressure that helps good.',
@@ -221,13 +284,21 @@ export function investigatorCandidates(ctx: NightContext): InfoCandidate[] {
 
 export function chefCandidates(ctx: NightContext): InfoCandidate[] {
 	const n = adjacentPairs(ctx.seats, (s) => isEvilSeat(ctx, s.id));
-	return numberCandidates(n, (n) => `${n} pair${n === 1 ? '' : 's'} of evil players are sitting next to each other.`);
+	return numberCandidates(
+		n,
+		(n) => `${n} pair${n === 1 ? '' : 's'} of evil players are sitting next to each other.`,
+		ctx.impactLevel
+	);
 }
 
 export function empathCandidates(ctx: NightContext): InfoCandidate[] {
 	const { ccw, cw } = livingNeighbours(ctx.seats, ctx.askingSeatId);
 	const n = [ccw, cw].filter((s) => s && isEvilSeat(ctx, s.id)).length;
-	return numberCandidates(n, (n) => `${n} of your living neighbours ${n === 1 ? 'is' : 'are'} evil.`);
+	return numberCandidates(
+		n,
+		(n) => `${n} of your living neighbours ${n === 1 ? 'is' : 'are'} evil.`,
+		ctx.impactLevel
+	);
 }
 
 /**
@@ -474,6 +545,44 @@ export function parseChoiceResult(raw: string | null): ParsedChoiceResult | null
 export interface WakeStep {
 	seat: SeatRow;
 	character: Character;
+}
+
+/**
+ * Builds a WakeStep for a seat that's secretly running ANOTHER character's
+ * mechanics — the shared shape behind both the Amnesiac's "secretly IS..."
+ * assignment and the Cannibal's "inherits the last executed player's
+ * ability" (see amnesiac-abilities.ts / cannibal.ts and their host-page
+ * Seats tab controls). Returns null when the mimicked character wouldn't
+ * wake THIS night either (matching what would happen for a seat genuinely
+ * playing that role), or when it's wakeIfDead-gated and this seat is still
+ * alive.
+ *
+ * `labelSuffix` decorates the display name (e.g. "Empath (Amnesiac)") so
+ * the Storyteller's own queue still shows which seat this really is — the
+ * mimicked character's real `id` is kept as-is, though, since NightDispatch
+ * and infoCandidatesFor both dispatch some special-cased behaviour off
+ * exact ids (the Undertaker's "executed yesterday" picker, the Fortune
+ * Teller/Ravenkeeper reveal buttons, the Washerwoman/Librarian/Investigator
+ * preplan lookups) and this is what lets a mimicked assignment get all of
+ * that automatically, for free.
+ */
+export function mimicWakeStep(
+	seat: SeatRow,
+	mimicked: Character,
+	night: number,
+	labelSuffix: string
+): WakeStep | null {
+	const pos = night <= 1 ? mimicked.firstNight : mimicked.otherNight;
+	if (pos == null) return null;
+	if (mimicked.wakeIfDead && seat.alive) return null;
+	return {
+		seat,
+		character: {
+			...mimicked,
+			name: `${mimicked.name} (${labelSuffix})`,
+			summary: `${labelSuffix}, secretly running the ${mimicked.name}: ${mimicked.summary}`
+		}
+	};
 }
 
 /** Which seated, role-assigned characters act this night, in order. Builds on scripts.ts's nightOrder(). */
