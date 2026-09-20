@@ -227,11 +227,12 @@ def main():
     ap.add_argument("--line-contrast-min", type=float, default=16.0)
     ap.add_argument("--line-max-halfwidth", type=float, default=11.0)
     ap.add_argument("--pane-sparkle-strength", type=float, default=0.35)
-    ap.add_argument("--candle-glint-strength", type=float, default=0.16,
-                     help="a very small extra highlight low on the window's left side, tinted "
-                          "warm gold like the candle overlay that sits just outside the frame "
-                          "there -- Mickey's \"another very small reflection on the panels that "
-                          "reflects the candle light\"; 0 disables")
+    ap.add_argument("--candle-glint-strength", type=float, default=0.24,
+                     help="a small extra highlight low on the window's left side, tinted warm "
+                          "gold like the candle overlay that sits just outside the frame there "
+                          "-- Mickey's \"another very small reflection on the panels that "
+                          "reflects the candle light\", nudged up once from 0.16 per \"make the "
+                          "candle reflection a bit more\"; 0 disables")
     ap.add_argument("--bevel-strength", type=float, default=0.5)
     ap.add_argument("--texture-strength", type=float, default=0.15)
     ap.add_argument("--texture-warp-px", type=float, default=0.5)

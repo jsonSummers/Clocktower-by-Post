@@ -2,14 +2,18 @@ import { base } from '$app/paths';
 import type { ScriptTheme } from './scriptTheme';
 
 /**
- * app.css defines --altar-tex/--stone-tex/--parchment-tex/--wood-tex/
- * --redstone-tex as CSS custom properties with hardcoded root-relative
- * url('/textures/...') values, once per [data-theme]/[data-script-theme]
- * combination. That's fine for a deploy at the domain root (Vercel,
- * self-hosted, a custom domain) but breaks on a GitHub Pages *project*
- * page, served from /reponame/ — CSS url() values aren't something
- * SvelteKit's router or its `base` path can rewrite, unlike a Svelte
- * component's own href/src attributes.
+ * app.css defines --stone-tex/--parchment-tex/--wood-tex/--redstone-tex as
+ * CSS custom properties with hardcoded root-relative url('/textures/...')
+ * values, once per [data-theme]/[data-script-theme] combination -- plus
+ * --altar-tex-gothic/--altar-tex-lovecraft, which exist in BOTH variants
+ * regardless of [data-script-theme] (Avatar.svelte picks between them per
+ * character, not from the page's global theme -- a page mixing characters
+ * from both scripts, e.g. a Storyteller reference view, needs each
+ * avatar's own brick to follow ITS OWN script). That's fine for a deploy
+ * at the domain root (Vercel, self-hosted, a custom domain) but breaks on
+ * a GitHub Pages *project* page, served from /reponame/ — CSS url()
+ * values aren't something SvelteKit's router or its `base` path can
+ * rewrite, unlike a Svelte component's own href/src attributes.
  *
  * Fix: re-set these same properties from JS, inline on <html>, with the
  * correct `base` prefix baked in — inline style always wins over a
@@ -56,7 +60,10 @@ function apply() {
 	const files = FILES[scriptTheme][mode];
 	const style = document.documentElement.style;
 	const url = (name: string) => `url('${base}/textures/${name}')`;
-	style.setProperty('--altar-tex', url(files.altar));
+	// Both script variants, always -- see the module doc for why this
+	// can't just follow the page's current `scriptTheme` like the rest.
+	style.setProperty('--altar-tex-gothic', url(FILES.gothic[mode].altar));
+	style.setProperty('--altar-tex-lovecraft', url(FILES.lovecraft[mode].altar));
 	style.setProperty('--stone-tex', url(files.stone));
 	style.setProperty('--parchment-tex', url(files.parchment));
 	// Constant across every theme/mode today, but still routed through the

@@ -32,6 +32,14 @@
 	// share the same Gothic arch clip shape -- only the overlay decoration
 	// differs.
 	const frame = $derived(frameForCharacter(characterId));
+	// Which of the two always-both-defined --altar-tex-{gothic,lovecraft}
+	// custom properties (src/app.css, src/lib/textureVars.ts) this
+	// character's own altar strip uses -- picked from `frame`, same as the
+	// candle/skull art below, NOT from the page's global [data-script-theme]
+	// (a page mixing characters from both scripts, e.g. a Storyteller
+	// reference view, needs each avatar's brick to follow its own
+	// character, exactly like the candle/skull overlay already does).
+	const altarTexVar = $derived(frame === 'lovecraft' ? '--altar-tex-lovecraft' : '--altar-tex-gothic');
 	const sigilRay = sigilRayPoints(ELDRITCH_SIGIL_CENTER.cx, ELDRITCH_SIGIL_CENTER.cy);
 	const ring = sigilRing(ELDRITCH_SIGIL_CENTER.cx, ELDRITCH_SIGIL_CENTER.cy);
 	$effect(() => {
@@ -90,7 +98,7 @@
 		<span
 			class="altar-strip"
 			style="height: {ALTAR_STRIP_HEIGHT}%; clip-path: polygon({ALTAR_STRIP_TOP_INSET}% 0%, {100 -
-				ALTAR_STRIP_TOP_INSET}% 0%, 100% 100%, 0% 100%);"
+				ALTAR_STRIP_TOP_INSET}% 0%, 100% 100%, 0% 100%); --altar-tex: var({altarTexVar});"
 		></span>
 
 		<!--
@@ -213,8 +221,12 @@
 	/*
 	 * Altar strip -- a short brick-textured shelf spanning the window's
 	 * width (see candleDeco.ts's ALTAR_STRIP_HEIGHT/ALTAR_STRIP_TOP_INSET
-	 * for the trapezoid taper). --altar-tex is a per-script/per-theme
-	 * token (src/app.css), same convention as --stone-tex/--parchment-tex.
+	 * for the trapezoid taper). --altar-tex here is set inline per
+	 * instance from altarTexVar above (picking --altar-tex-gothic or
+	 * --altar-tex-lovecraft, both always defined in src/app.css /
+	 * src/lib/textureVars.ts) rather than read as a page-global token --
+	 * this element's own character decides its brick, same as the
+	 * candle/skull art below, not the page's current [data-script-theme].
 	 * A soft top-edge highlight plus a bottom shadow gives the thin strip
 	 * a little shelf-like depth rather than reading as a flat decal.
 	 */

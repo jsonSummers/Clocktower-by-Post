@@ -14,14 +14,17 @@ Three things it does, in order:
      margin, but flush with the canvas edge wherever the art already
      touches it -- the candles are meant to sit flush with the bottom of
      the overlay, so their crop keeps that edge exact).
-  2. Recolours the candle art for Laissez un Faire. The wax and the flame
-     in the source painting share almost the same warm hue (~44 degrees)
-     -- candlelight reflecting off cream wax paints it the same colour as
-     the flame itself -- so a hue-based split doesn't work. Saturation and
-     value do: the flame is the small, highly-saturated/bright region,
-     everything else is wax/shadow. Blends between a cool near-black
-     target (wax) and a blue-cyan target (flame) by that saturation/value
-     "flameness", not a hard mask, so the transition stays soft.
+  2. Recolours the candle art for Laissez un Faire -- flame only. Mickey:
+     "the candles are black for the lovecraft theme, make them default but
+     with blue flames" -- so the wax now stays exactly as painted (no hue/
+     sat/value change at all) and only the flame shifts to blue-cyan. The
+     flame region itself is still found the same way as the earlier black-
+     wax version: the wax and the flame in the source painting share
+     almost the same warm hue (~44 degrees) -- candlelight reflecting off
+     cream wax paints it the same colour as the flame itself -- so a hue-
+     based split doesn't work, but saturation/value do (the flame is the
+     small, highly-saturated/bright region). Blended by that "flameness"
+     factor, not a hard mask, so the transition stays soft.
   3. Locates the flame tips in the (cropped, un-recoloured) candle art, for
      Avatar.svelte's CANDLE_GLOW_CENTER constant in candleDeco.ts -- the
      centre of the animated ambient glow "between the candle and the
@@ -96,8 +99,9 @@ def tight_crop(im: Image.Image, pad=6, bottom_flush=True) -> Image.Image:
 
 
 def recolor_to_lovecraft(im: Image.Image) -> Image.Image:
-    """Black wax (cool charcoal, subtle sheen) + blue flame -- see the
-    module docstring for why this is driven by saturation/value, not hue."""
+    """Wax stays exactly as painted; only the flame shifts to blue-cyan --
+    see the module docstring for why the flame region is found via
+    saturation/value, not hue."""
     arr = np.asarray(im).astype(np.float64) / 255.0
     rgb = arr[..., :3]
     alpha = arr[..., 3:4]
@@ -106,17 +110,16 @@ def recolor_to_lovecraft(im: Image.Image) -> Image.Image:
 
     flameness = smoothstep(s, 0.40, 0.60) * smoothstep(v, 0.55, 0.75)
 
-    wax_v = 0.16 + v * 0.30
-    wax_s = 0.12 + (v * 0.08)
-    wax_h = np.full_like(h, 220.0 / 360.0)
-
     flame_v = np.clip(v * 1.05, 0, 1)
     flame_s = np.clip(s * 1.05 + 0.05, 0, 1)
     flame_h = np.full_like(h, 205.0 / 360.0)
 
-    out_h = wax_h * (1 - flameness) + flame_h * flameness
-    out_s = wax_s * (1 - flameness) + flame_s * flameness
-    out_v = wax_v * (1 - flameness) + flame_v * flameness
+    # At flameness == 0 this is exactly (h, s, v) -- the original wax,
+    # untouched. Only pixels the flame mask actually pulls toward the blue
+    # target move at all.
+    out_h = h * (1 - flameness) + flame_h * flameness
+    out_s = s * (1 - flameness) + flame_s * flameness
+    out_v = v * (1 - flameness) + flame_v * flameness
 
     out_rgb = hsv_to_rgb_arr(np.stack([out_h, out_s, out_v], axis=-1))
     out = np.concatenate([out_rgb, alpha], axis=-1)

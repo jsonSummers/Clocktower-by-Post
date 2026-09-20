@@ -41,7 +41,8 @@
 	 * stays green under the lovecraft theme below, while this one needs to
 	 * go blue there for the black-wax/blue-flame candles. */
 	--candle-glow: 255, 150, 50;
-	--altar-tex: url('/textures/altar-brick.jpg');
+	--altar-tex-gothic: url('/textures/altar-brick.jpg');
+	--altar-tex-lovecraft: url('/textures/altar-brick-lovecraft.jpg');
 	--stone-tex: url('/textures/limestone.jpg');
 	--parchment-tex: url('/textures/parchment.jpg');
 	--wood-tex: url('/textures/oak.jpg');
@@ -78,7 +79,8 @@
 	--lead: #1a1712;
 	--gilt-glow: 255, 189, 110;
 	--candle-glow: 255, 170, 70;
-	--altar-tex: url('/textures/altar-brick-night.jpg');
+	--altar-tex-gothic: url('/textures/altar-brick-night.jpg');
+	--altar-tex-lovecraft: url('/textures/altar-brick-lovecraft-night.jpg');
 
 	/* The day textures above were being silently reused here too -- at
 	 * normal opacity the near-black night gradient on `body` just painted
@@ -147,7 +149,6 @@
 	 * black eith a bluish flame" -- the candle glow goes blue here while
 	 * --gilt-glow (a separate, unrelated UI-highlight colour) stays green. */
 	--candle-glow: 70, 150, 255;
-	--altar-tex: url('/textures/altar-brick-lovecraft.jpg');
 	--stone-tex: url('/textures/warded-damask.jpg');
 	--parchment-tex: url('/textures/old-leather.jpg');
 
@@ -177,7 +178,6 @@
 	--lead: #0e0807;
 	--gilt-glow: 130, 200, 156;
 	--candle-glow: 100, 180, 255;
-	--altar-tex: url('/textures/altar-brick-lovecraft-night.jpg');
 	--stone-tex: url('/textures/warded-damask-night.jpg');
 	--parchment-tex: url('/textures/old-leather-night.jpg');
 
