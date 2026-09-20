@@ -326,6 +326,34 @@ export function dismissNomination(c: SupabaseClient, nominationId: string) {
 	return c.from('nominations').delete().eq('id', nominationId);
 }
 
+// ---- prep notes (Storyteller's pre-written drafts for an upcoming night) ----
+
+/** Storyteller drafts or updates their private plan for what a seat will be
+ * told on a given night — safe to call repeatedly while typing, there's no
+ * separate create step. Works for a night that hasn't happened yet, so the
+ * Storyteller can plan ahead during the day. */
+export function savePrepNote(
+	c: SupabaseClient,
+	gameId: string,
+	night: number,
+	seatId: string,
+	body: string
+) {
+	return c
+		.from('prep_notes')
+		.upsert(
+			{ game_id: gameId, night, seat_id: seatId, body },
+			{ onConflict: 'game_id,night,seat_id' }
+		);
+}
+
+/** Tags a draft as already sent, once its wording has actually gone out as
+ * that seat's night info — purely a "used" hint in the UI, nothing else
+ * reads this back. */
+export function markPrepNoteReleased(c: SupabaseClient, id: string) {
+	return c.from('prep_notes').update({ released: true }).eq('id', id);
+}
+
 /** Storyteller fires the Virgin's ability: the nominator is executed instead
  * of the nominee, and the nomination closes with no debate/vote. Whether this
  * SHOULD fire is decided client-side by checkVirgin() (src/lib/scripts/virgin.ts)

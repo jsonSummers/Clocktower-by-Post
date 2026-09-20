@@ -2,16 +2,21 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { supabase, ensureSignedIn } from '$lib/supabase';
-	import { serverTimeSynced } from '$lib/server-time';
+	import { serverTimeSynced, currentOffset } from '$lib/server-time';
 	import { GameSession } from '$lib/game.svelte';
-	import { nextPhase, phaseLabel } from '$lib/clock';
-	import { getScript, getCharacter } from '$lib/scripts';
+	import { nextPhase, phaseLabel, formatClock } from '$lib/clock';
+	import { getScript, getCharacter, findCharacterAnywhere, SCRIPTS } from '$lib/scripts';
 	import { applyScriptTheme } from '$lib/scriptTheme';
 	import { dealGame } from '$lib/scripts/deal';
 	import { checkWinCondition, voteState } from '$lib/scripts/winCondition';
 	import { checkVirgin } from '$lib/scripts/virgin';
 	import { savantPrep, fishermanPrep, ARTIST_GUIDANCE } from '$lib/dayAsk';
-	import { AMNESIAC_ABILITIES } from '$lib/scripts/amnesiac-abilities';
+	import {
+		AMNESIAC_ABILITIES,
+		encodeAmnesiacNote,
+		parseAmnesiacNote,
+		type AmnesiacAssignment
+	} from '$lib/scripts/amnesiac-abilities';
 	import {
 		phase as phaseRpc,
 		applyDeal,
@@ -52,6 +57,17 @@
 	let confirmingKick = $state<string | null>(null);
 	let dealing = $state(false);
 	let dealMsg = $state<string | null>(null);
+	/** Staged text for the Amnesiac's free-text ability box — see
+	 * setAmnesiacCustomText() below. Keyed by seatId. */
+	let amnesiacDraft = $state<Record<string, string>>({});
+	/** Bumps savantPrep()/fishermanPrep()'s `variant` for a seat, so the
+	 * "🔁 New options" button in the Requests tab actually reshuffles
+	 * instead of showing the same worked pair every time. */
+	let dayAskVariant = $state<Record<string, number>>({});
+	/** null = the Night tab shows the real, live night; a number previews
+	 * that night instead (read-only for sending, but "plan ahead" notes can
+	 * still be written — see NightDispatch's prep-notes support). */
+	let planNight = $state<number | null>(null);
 
 	onMount(() => {
 		ensureSignedIn().then(() => session.start(gameId));
@@ -109,6 +125,19 @@
 	const virginCheck = $derived(
 		openNom ? checkVirgin(openNom, session.nominations, session.roles, script) : null
 	);
+	/** Mirrors NightDispatch's own `actualNight` derivation — needed here too,
+	 * for the "plan ahead" night picker in the Night tab below. */
+	const nightTabActualNight = $derived(
+		session.phase?.kind === 'night' || session.phase?.kind === 'day' ? session.phase.cycle : null
+	);
+	/** "1:23" / "+0:07 over" — see GameSession.debateRemainingMs. Null hides
+	 * the whole timer line (no debate timer set, or nothing's in debate). */
+	const debateDisplay = $derived.by(() => {
+		const ms = session.debateRemainingMs;
+		if (ms == null) return null;
+		return formatClock({ running: true, elapsedMs: 0, remainingMs: ms, overrun: ms < 0 });
+	});
+	const debateOverrun = $derived((session.debateRemainingMs ?? 0) < 0);
 	async function fireVirgin() {
 		if (!openNom) return;
 		await run(resolveVirgin(supabase, openNom.id));
@@ -156,21 +185,86 @@
 		return session.redHerringSeatId === seatId;
 	}
 
-	const AMNESIAC_NOTE_PREFIX = '[Amnesiac] ';
+	/** Everyone this app knows about, for the Amnesiac's "secretly IS another
+	 * character" picker — deliberately not limited to the current script
+	 * (see findCharacterAnywhere's own doc comment), deduped by id, sorted
+	 * for a sane dropdown. Excludes drunk/amnesiac themselves. */
+	const mimicChoices = $derived(
+		[
+			...new Map(
+				SCRIPTS.flatMap((s) => s.characters)
+					// Evil-team characters excluded: mimicking one would surface
+					// that character's REAL night-1 evil reveal on the Amnesiac's
+					// dispatch card if the same character id is genuinely in play
+					// (night1EvilReveals() keys off character id, not seat) — and a
+					// Townsfolk secretly being handed an evil ability doesn't fit
+					// the character anyway.
+					.filter(
+						(c) => c.id !== 'amnesiac' && c.id !== 'drunk' && c.team !== 'demon' && c.team !== 'minion'
+					)
+					.map((c) => [c.id, c] as const)
+			).values()
+		].sort((a, b) => a.name.localeCompare(b.name))
+	);
 
-	function amnesiacAbility(seatId: string): string | null {
-		const note = session.grimoire.find((g) => g.seat_id === seatId)?.notes ?? '';
-		return note.startsWith(AMNESIAC_NOTE_PREFIX) ? note.slice(AMNESIAC_NOTE_PREFIX.length) : null;
+	function amnesiacInfo(seatId: string): AmnesiacAssignment | null {
+		return parseAmnesiacNote(session.grimoire.find((g) => g.seat_id === seatId)?.notes);
 	}
 
-	async function setAmnesiacAbility(seatId: string, text: string) {
+	/** Plain ability text for wherever this app already shows it (the day-guess
+	 * reminder in the Requests tab) — unaffected by whether it's mimicked or
+	 * free-written, both always carry a human-readable `text`. */
+	function amnesiacAbility(seatId: string): string | null {
+		return amnesiacInfo(seatId)?.text ?? null;
+	}
+
+	function mimicName(characterId: string): string {
+		return findCharacterAnywhere(characterId)?.name ?? characterId;
+	}
+
+	async function saveAmnesiacInfo(seatId: string, info: AmnesiacAssignment) {
+		await run(setGrimoireNote(supabase, gameId, seatId, encodeAmnesiacNote(info)));
+	}
+
+	/** Picked from the prewritten list, or the "🎲 Random" button below — a
+	 * flavour ability the Storyteller runs by hand, same as before this
+	 * session's changes. Clears any mimic, since the two are alternatives. */
+	async function setAmnesiacPrewritten(seatId: string, text: string) {
 		if (!text) return;
-		await run(setGrimoireNote(supabase, gameId, seatId, `${AMNESIAC_NOTE_PREFIX}${text}`));
+		amnesiacDraft[seatId] = text;
+		await saveAmnesiacInfo(seatId, { text, mimics: null });
 	}
 
 	async function randomAmnesiacAbility(seatId: string) {
 		const pick = AMNESIAC_ABILITIES[Math.floor(Math.random() * AMNESIAC_ABILITIES.length)];
-		if (pick) await setAmnesiacAbility(seatId, pick.text);
+		if (pick) await setAmnesiacPrewritten(seatId, pick.text);
+	}
+
+	/** The Amnesiac secretly IS this character — NightDispatch.svelte then
+	 * gives this seat a real nightly wake step using that character's own
+	 * mechanics (automatic info candidates when it has any), instead of the
+	 * Storyteller improvising free text. Passing null clears it back to a
+	 * plain text-only ability. */
+	async function setAmnesiacMimic(seatId: string, characterId: string | null) {
+		if (!characterId) {
+			await saveAmnesiacInfo(seatId, { text: amnesiacInfo(seatId)?.text ?? '', mimics: null });
+			return;
+		}
+		const mimicked = findCharacterAnywhere(characterId);
+		const text = mimicked
+			? `Secretly the ${mimicked.name}: ${mimicked.summary}`
+			: (amnesiacInfo(seatId)?.text ?? '');
+		amnesiacDraft[seatId] = text;
+		await saveAmnesiacInfo(seatId, { text, mimics: characterId });
+	}
+
+	/** The Storyteller's own hand-written ability text — clears any mimic,
+	 * since a mimicked assignment's text is generated from the mimicked
+	 * character and shouldn't be edited out from under it. */
+	async function setAmnesiacCustomText(seatId: string, text: string) {
+		const trimmed = text.trim();
+		if (!trimmed) return;
+		await saveAmnesiacInfo(seatId, { text: trimmed, mimics: null });
 	}
 
 	/** Assigns a random not-in-play Townsfolk as this seat's cover story and
@@ -455,9 +549,11 @@
 							</button>
 						{/if}
 						{#if session.roleFor(seat.id) === 'amnesiac'}
+							{@const info = amnesiacInfo(seat.id)}
 							<div class="row" style="align-items:center;gap:0.4rem;flex-wrap:wrap">
 								<span class="drunktag">
-									🌀 Secret ability: {amnesiacAbility(seat.id) ?? '— not set yet —'}
+									🌀 Secret ability: {info?.text || '— not set yet —'}
+									{#if info?.mimics}<em>(mimics {mimicName(info.mimics)} — auto info at night)</em>{/if}
 								</span>
 							</div>
 							<div class="row" style="flex-wrap:wrap;gap:0.3rem">
@@ -465,11 +561,11 @@
 									value=""
 									onchange={(e) => {
 										const v = e.currentTarget.value;
-										if (v) setAmnesiacAbility(seat.id, v);
+										if (v) setAmnesiacPrewritten(seat.id, v);
 										e.currentTarget.value = '';
 									}}
 								>
-									<option value="">— pick a secret ability —</option>
+									<option value="">— pick a prewritten ability —</option>
 									{#each AMNESIAC_ABILITIES as a (a.id)}
 										<option value={a.text}>{a.name}</option>
 									{/each}
@@ -478,6 +574,30 @@
 									🎲 Random
 								</button>
 							</div>
+							<div class="row" style="flex-wrap:wrap;gap:0.3rem;align-items:center">
+								<select
+									value={info?.mimics ?? ''}
+									onchange={(e) => setAmnesiacMimic(seat.id, e.currentTarget.value || null)}
+									title="Wakes them at night in that character's own night-order slot and offers the same automatic info candidates, instead of you improvising by hand"
+								>
+									<option value="">— or: secretly IS another character (auto night info) —</option>
+									{#each mimicChoices as c (c.id)}
+										<option value={c.id}>{c.name}</option>
+									{/each}
+								</select>
+							</div>
+							<textarea
+								rows="2"
+								placeholder="…or write your own secret ability text"
+								value={amnesiacDraft[seat.id] ?? info?.text ?? ''}
+								oninput={(e) => (amnesiacDraft[seat.id] = e.currentTarget.value)}
+							></textarea>
+							<button
+								class="ghostvote"
+								onclick={() => setAmnesiacCustomText(seat.id, amnesiacDraft[seat.id] ?? '')}
+							>
+								Save custom text
+							</button>
 						{/if}
 						<select
 							value={session.roleFor(seat.id) ?? ''}
@@ -523,7 +643,30 @@
 			</section>
 		{:else if tab === 'night'}
 			<section class="stack">
-				<NightDispatch {session} {gameId} />
+				{#if nightTabActualNight != null}
+					<div class="row" style="align-items:center;gap:0.4rem;flex-wrap:wrap">
+						<label for="planNight" class="muted" style="font-size:0.82rem">Viewing</label>
+						<select
+							id="planNight"
+							value={planNight ?? ''}
+							onchange={(e) => {
+								const v = e.currentTarget.value;
+								planNight = v ? Number(v) : null;
+							}}
+						>
+							<option value="">Night {nightTabActualNight} (live)</option>
+							<option value={nightTabActualNight + 1}>Night {nightTabActualNight + 1} — plan ahead</option>
+							<option value={nightTabActualNight + 2}>Night {nightTabActualNight + 2} — plan ahead</option>
+						</select>
+						{#if planNight != null}
+							<span class="muted" style="font-size:0.78rem">
+								Reference only — write "notes to self" for later, but nothing sends until it's
+								really that night.
+							</span>
+						{/if}
+					</div>
+				{/if}
+				<NightDispatch {session} {gameId} previewNight={planNight} />
 			</section>
 		{:else if tab === 'vote'}
 			<section class="stack">
@@ -570,9 +713,10 @@
 							{/if}.
 						</p>
 						{#if openNom.debate_seconds}
-							<p class="muted" style="margin:0">
-								{openNom.debate_seconds}s for the accuser's case and the defence, however you split
-								it — nothing here times it automatically.
+							<p class="debate-timer" class:overrun={debateOverrun} style="margin:0">
+								⏱ <strong>{debateDisplay}</strong>
+								{debateOverrun ? 'over' : 'left'} for the accuser's case and the defence, however you
+								split it.
 							</p>
 						{/if}
 						{#if virginCheck?.fires}
@@ -682,29 +826,49 @@
 							{@const dayAsk = askerChar.dayAsk}
 							<div class="dayask-prep stack" style="gap:0.3rem">
 								{#if dayAsk.kind === 'savant'}
-									{@const prep = savantPrep({
-										script: script!,
-										seats: session.seats,
-										roleOf: (id: string) => session.roleFor(id),
-										night: 0,
-										askingSeatId: req.seat_id
-									})}
+									{@const prep = savantPrep(
+										{
+											script: script!,
+											seats: session.seats,
+											roleOf: (id: string) => session.roleFor(id),
+											night: 0,
+											askingSeatId: req.seat_id
+										},
+										dayAskVariant[req.seat_id] ?? 0
+									)}
 									<p class="muted" style="margin:0;font-size:0.8rem">{prep.guidance}</p>
 									{#each prep.candidates as c (c.label)}
 										<p style="margin:0;font-size:0.9rem"><strong>{c.label}:</strong> {c.text}</p>
 									{/each}
+									<button
+										style="align-self:flex-start"
+										onclick={() =>
+											(dayAskVariant[req.seat_id] = (dayAskVariant[req.seat_id] ?? 0) + 1)}
+									>
+										&#x21bb; New options
+									</button>
 								{:else if dayAsk.kind === 'fisherman'}
-									{@const prep = fishermanPrep({
-										script: script!,
-										seats: session.seats,
-										roleOf: (id: string) => session.roleFor(id),
-										night: 0,
-										askingSeatId: req.seat_id
-									})}
+									{@const prep = fishermanPrep(
+										{
+											script: script!,
+											seats: session.seats,
+											roleOf: (id: string) => session.roleFor(id),
+											night: 0,
+											askingSeatId: req.seat_id
+										},
+										dayAskVariant[req.seat_id] ?? 0
+									)}
 									<p class="muted" style="margin:0;font-size:0.8rem">{prep.guidance}</p>
 									{#each prep.candidates as c (c.label)}
 										<p style="margin:0;font-size:0.9rem"><strong>{c.label}:</strong> {c.text}</p>
 									{/each}
+									<button
+										style="align-self:flex-start"
+										onclick={() =>
+											(dayAskVariant[req.seat_id] = (dayAskVariant[req.seat_id] ?? 0) + 1)}
+									>
+										&#x21bb; New options
+									</button>
 								{:else if dayAsk.kind === 'artist'}
 									<p class="muted" style="margin:0;font-size:0.8rem">{ARTIST_GUIDANCE}</p>
 								{:else if dayAsk.kind === 'amnesiac'}
@@ -804,5 +968,11 @@
 		align-self: flex-start;
 		font-size: 0.78rem;
 		padding: 0.2rem 0.5rem;
+	}
+	.debate-timer {
+		font-variant-numeric: tabular-nums;
+	}
+	.debate-timer.overrun {
+		color: var(--danger);
 	}
 </style>

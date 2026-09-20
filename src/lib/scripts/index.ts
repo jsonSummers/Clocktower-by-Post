@@ -26,6 +26,22 @@ export function scriptForCharacter(characterId: string): Script | undefined {
 }
 
 /**
+ * Look up a character by id across every script the app knows about,
+ * regardless of which script the caller is currently running — used for the
+ * Amnesiac's "secretly IS another character" assignment (see
+ * amnesiac-abilities.ts / the host page's Seats tab), since the mimicked
+ * character doesn't have to belong to the same script as the game being
+ * played.
+ */
+export function findCharacterAnywhere(characterId: string): Character | undefined {
+	for (const s of SCRIPTS) {
+		const c = s.characters.find((ch) => ch.id === characterId);
+		if (c) return c;
+	}
+	return undefined;
+}
+
+/**
  * The order the Storyteller's night-dispatch screen should walk, for a given
  * night. `first` selects the first-night order; otherwise the every-other-night
  * order. Characters that don't act on that night are excluded.

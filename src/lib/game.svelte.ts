@@ -2,6 +2,7 @@ import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { syncServerTime, currentOffset } from './server-time';
 import { phaseFromGame } from './phase';
+import { debateRemainingMs as computeDebateRemainingMs } from './clock';
 import { livingNeighbours } from './circle';
 import { readClock, formatClock, phaseLabel, type ClockView, type PhaseState } from './clock';
 import type {
@@ -12,7 +13,8 @@ import type {
 	NightActionRow,
 	GrimoireRow,
 	NominationRow,
-	VoteRow
+	VoteRow,
+	PrepNoteRow
 } from './types';
 
 /** How often we poll as a fallback, independent of realtime channel health. */
@@ -33,6 +35,7 @@ type DataSig = {
 	grimoire: string;
 	nominations: string;
 	votes: string;
+	prep: string;
 };
 
 /**
@@ -65,6 +68,9 @@ export class GameSession {
 	nominations = $state<NominationRow[]>([]);
 	/** Every raised hand across every nomination — also visible to everyone (voting is public). */
 	votes = $state<VoteRow[]>([]);
+	/** Storyteller-only per RLS (see prep_notes' policy) — a player's client
+	 * always sees an empty array here, same as grimoire. */
+	prepNotes = $state<PrepNoteRow[]>([]);
 	error = $state<string | null>(null);
 	now = $state(Date.now());
 	userId = $state<string | null>(null);
@@ -91,7 +97,8 @@ export class GameSession {
 		night: '',
 		grimoire: '',
 		nominations: '',
-		votes: ''
+		votes: '',
+		prep: ''
 	};
 
 	constructor(client: SupabaseClient = supabase) {
@@ -156,6 +163,21 @@ export class GameSession {
 	/** Whether this client's own seat has raised its hand on the latest nomination. */
 	readonly myVoteCast = $derived(
 		this.mySeat ? this.votesForLatest.some((v) => v.seat_id === this.mySeat!.id) : false
+	);
+	/** Milliseconds left in the currently-open nomination's debate window, or
+	 * null if there isn't one in debate right now or it has no timer — see
+	 * debateRemainingMs() in clock.ts. Ticks with `now`, same as the phase
+	 * clock. Shared here so the host page and PlayerView don't each
+	 * reimplement the sync math. */
+	readonly debateRemainingMs = $derived<number | null>(
+		this.openNomination && this.openNomination.stage === 'debate'
+			? computeDebateRemainingMs(
+					this.openNomination.debate_started_at,
+					this.openNomination.debate_seconds,
+					this.now,
+					currentOffset()
+				)
+			: null
 	);
 
 	roleFor(seatId: string): string | null {
@@ -245,6 +267,11 @@ export class GameSession {
 				{ event: '*', schema: 'public', table: 'votes' },
 				() => this.refreshVotes()
 			)
+			.on(
+				'postgres_changes',
+				{ event: '*', schema: 'public', table: 'prep_notes', filter: `game_id=eq.${gameId}` },
+				() => this.refreshPrepNotes()
+			)
 			.subscribe((status) => {
 				if (this.#stopped) return;
 				if (status === 'SUBSCRIBED') {
@@ -279,7 +306,8 @@ export class GameSession {
 			this.refreshNightActions(),
 			this.refreshGrimoire(),
 			this.refreshNominations(),
-			this.refreshVotes()
+			this.refreshVotes(),
+			this.refreshPrepNotes()
 		]);
 	}
 
@@ -360,6 +388,14 @@ export class GameSession {
 		const { data } = await this.#client.from('votes').select('*');
 		const rows = (data ?? []) as VoteRow[];
 		this.#applyIfChanged('votes', rows, () => (this.votes = rows));
+	}
+
+	/** Empty (not an error) for a player's client — prep_notes is
+	 * storyteller-only per RLS, same as grimoire. */
+	async refreshPrepNotes() {
+		const { data } = await this.#client.from('prep_notes').select('*').eq('game_id', this.#gameId);
+		const rows = (data ?? []) as PrepNoteRow[];
+		this.#applyIfChanged('prep', rows, () => (this.prepNotes = rows));
 	}
 
 	stop() {

@@ -22,7 +22,7 @@
 	 * as reference only.
 	 */
 	import type { GameSession } from '$lib/game.svelte';
-	import { getScript, getCharacter } from '$lib/scripts';
+	import { getScript, getCharacter, findCharacterAnywhere } from '$lib/scripts';
 	import type { Character } from '$lib/types';
 	import {
 		wakeOrder,
@@ -30,14 +30,18 @@
 		night1EvilReveals,
 		parseChoiceResult,
 		choicePromptFor,
-		type InfoCandidate
+		type InfoCandidate,
+		type WakeStep
 	} from '$lib/nightInfo';
+	import { parseAmnesiacNote } from '$lib/scripts/amnesiac-abilities';
 	import {
 		sendNightInfo,
 		askNightChoice,
 		sendChoiceReading,
 		reopenNightChoice,
-		clearNightAction
+		clearNightAction,
+		savePrepNote,
+		markPrepNoteReleased
 	} from '$lib/actions';
 	import Avatar from './Avatar.svelte';
 
@@ -73,9 +77,60 @@
 	/** False when previewing a night other than the one the game clock is
 	 * really on — the panel becomes read-only reference in that case. */
 	const live = $derived(previewNight == null || previewNight === actualNight);
+	/**
+	 * The Amnesiac's own wake step(s) — not a real seat_roles assignment, so
+	 * wakeOrder() can't find them the normal way. Built from grimoire.notes
+	 * (see amnesiac-abilities.ts): a `mimics` assignment reuses the mimicked
+	 * character's real mechanics wholesale (its night-order slot, its info
+	 * candidates if it has any) so the Storyteller runs it exactly like
+	 * anyone else who's really that character; a plain `text` assignment
+	 * (prewritten or free-written) instead gets a generic nightly reminder
+	 * slot near the end of the queue, with that text shown as a prompt for
+	 * the Storyteller to improvise from — same spirit as Cannibal/Lunatic's
+	 * "wake manually and dispatch as free text" in laissez-un-faire.ts.
+	 */
+	const amnesiacWakes = $derived.by(() => {
+		if (night == null) return [];
+		const out: WakeStep[] = [];
+		for (const seat of session.seats) {
+			if (session.roleFor(seat.id) !== 'amnesiac') continue;
+			const note = session.grimoire.find((g) => g.seat_id === seat.id)?.notes;
+			const info = parseAmnesiacNote(note);
+			if (!info) continue;
+			if (info.mimics) {
+				const mimicked = findCharacterAnywhere(info.mimics);
+				if (!mimicked) continue;
+				const pos = night <= 1 ? mimicked.firstNight : mimicked.otherNight;
+				if (pos == null) continue; // mimicked character doesn't wake this night either
+				if (mimicked.wakeIfDead && seat.alive) continue; // e.g. mimicking Ravenkeeper while still alive
+				out.push({
+					seat,
+					character: {
+						...mimicked,
+						name: `${mimicked.name} (Amnesiac)`,
+						summary: `Amnesiac, secretly running the ${mimicked.name}: ${mimicked.summary}`
+					}
+				});
+			} else if (info.text) {
+				out.push({
+					seat,
+					character: {
+						id: 'amnesiac',
+						name: 'Amnesiac',
+						team: 'townsfolk',
+						summary: info.text,
+						firstNight: 900,
+						otherNight: 900,
+						prompt: { kind: 'none' }
+					}
+				});
+			}
+		}
+		return out;
+	});
 	const steps = $derived.by(() => {
 		if (!script || night == null) return [];
-		const raw = wakeOrder(script, session.seats, (id) => session.roleFor(id), night);
+		const raw = wakeOrder(script, session.seats, (id) => session.roleFor(id), night, amnesiacWakes);
 		// A wakeIfDead character (Ravenkeeper) is otherwise eligible on every
 		// night once dead — cut it off after the first night it actually got
 		// a chance to act, so it doesn't keep re-asking on every later night.
@@ -141,6 +196,10 @@
 	let variant = $state<Record<string, number>>({});
 	let executedFor = $state<Record<string, string>>({});
 	let editing = $state<Record<string, boolean>>({});
+	/** Staged text for the per-seat "plan ahead" note — see prepNoteFor() and
+	 * the Amnesiac's wake step above. Keyed by seatId; only diverges from
+	 * the saved session.prepNotes row while the Storyteller is mid-edit. */
+	let prepDraft = $state<Record<string, string>>({});
 
 	function candidatesFor(seatId: string, characterId: string): InfoCandidate[] {
 		if (!script || night == null) return [];
@@ -174,6 +233,20 @@
 		actionError = null;
 		await run(sendNightInfo(session.client, gameId, night, seatId, characterId, '', text));
 		editing[seatId] = false;
+		const note = prepNoteFor(seatId);
+		if (note && !note.released) run(markPrepNoteReleased(session.client, note.id));
+	}
+
+	/** This seat's saved "plan ahead" draft for the night being shown, if any. */
+	function prepNoteFor(seatId: string) {
+		if (night == null) return undefined;
+		return session.prepNotes.find((p) => p.seat_id === seatId && p.night === night);
+	}
+
+	function savePrep(seatId: string) {
+		if (night == null) return;
+		const body = (prepDraft[seatId] ?? prepNoteFor(seatId)?.body ?? '').trim();
+		run(savePrepNote(session.client, gameId, night, seatId, body));
 	}
 
 	async function ask(
@@ -237,7 +310,7 @@
 		</p>
 	{/if}
 	<div class="stack">
-		{#each steps as step (step.character.id)}
+		{#each steps as step (step.seat.id)}
 			{@const action = actionFor(step.seat.id)}
 			{@const kind = step.character.prompt.kind}
 			{@const reveal = night === 1 ? evilRevealText(step.character.id) : null}
@@ -263,6 +336,23 @@
 						{/if}
 					</span>
 				</div>
+
+				<details class="prepnote">
+					<summary>📝 Notes to self{prepNoteFor(step.seat.id)?.body ? '' : ' (empty)'}</summary>
+					<textarea
+						rows="2"
+						placeholder="Plan what you'll tell them, or jot a reminder — private, never sent, works for future nights too."
+						value={prepDraft[step.seat.id] ?? prepNoteFor(step.seat.id)?.body ?? ''}
+						oninput={(e) => (prepDraft[step.seat.id] = e.currentTarget.value)}
+					></textarea>
+					<button onclick={() => savePrep(step.seat.id)}>Save note</button>
+				</details>
+
+				{#if session.roleFor(step.seat.id) === 'amnesiac'}
+					<p class="drunk-warning">
+						🌀 Amnesiac's secret ability: {step.character.summary}
+					</p>
+				{/if}
 
 				{#if isDrunkSeat(step.seat.id)}
 					<p class="drunk-warning">
@@ -495,6 +585,14 @@
 							<button onclick={() => shuffle(step.seat.id)} title="Regenerate the decoy/lie candidates">
 								&#x21bb; shuffle
 							</button>
+							{#if prepNoteFor(step.seat.id)?.body}
+								<button
+									onclick={() => (draftText[step.seat.id] = prepNoteFor(step.seat.id)?.body ?? '')}
+									title="Copy in the note you planned earlier"
+								>
+									📝 use my note
+								</button>
+							{/if}
 						</div>
 						<textarea
 							rows="2"
@@ -635,5 +733,16 @@
 		border: 1px solid var(--border);
 		border-radius: 8px;
 		padding: 0.55rem 0.7rem;
+	}
+	.prepnote {
+		font-size: 0.82rem;
+	}
+	.prepnote summary {
+		cursor: pointer;
+		color: var(--text-dim);
+	}
+	.prepnote textarea {
+		margin-top: 0.4rem;
+		font-size: 0.82rem;
 	}
 </style>

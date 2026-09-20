@@ -120,3 +120,47 @@ export const AMNESIAC_ABILITIES: AmnesiacAbility[] = [
 export function getAmnesiacAbility(id: string): AmnesiacAbility | undefined {
 	return AMNESIAC_ABILITIES.find((a) => a.id === id);
 }
+
+/**
+ * What's actually stored for one seat's Amnesiac assignment (as JSON in
+ * grimoire.notes — see encodeAmnesiacNote/parseAmnesiacNote below). Either
+ * a free-written/prewritten `text` ability the Storyteller runs by hand
+ * every time it comes up, or a `mimics` character id — the Amnesiac
+ * secretly IS that character, so NightDispatch.svelte gives this seat a
+ * real nightly wake step using that character's own mechanics (automatic
+ * info candidates when the mimicked character supports them), same as
+ * anyone else who's really that character. The two are mutually exclusive
+ * in practice (setting one clears the other in the host page's UI), but
+ * both fields always round-trip so a mimicked assignment still has a
+ * human-readable `text` to show the Storyteller wherever the plain
+ * ability text is expected (the Requests tab, the day-guess reminder).
+ */
+export interface AmnesiacAssignment {
+	text: string;
+	mimics: string | null;
+}
+
+const AMNESIAC_NOTE_PREFIX = '[Amnesiac] ';
+
+export function encodeAmnesiacNote(a: AmnesiacAssignment): string {
+	return AMNESIAC_NOTE_PREFIX + JSON.stringify(a);
+}
+
+/** Reads a grimoire.notes value back into an AmnesiacAssignment, or null if
+ * this seat has no Amnesiac ability set yet. Tolerates the old plain-text
+ * format (`[Amnesiac] <text>`, from before mimicking existed) by treating
+ * the whole remainder as `text` with no mimic. */
+export function parseAmnesiacNote(note: string | null | undefined): AmnesiacAssignment | null {
+	if (!note || !note.startsWith(AMNESIAC_NOTE_PREFIX)) return null;
+	const rest = note.slice(AMNESIAC_NOTE_PREFIX.length);
+	try {
+		const v: unknown = JSON.parse(rest);
+		if (v && typeof v === 'object' && typeof (v as { text?: unknown }).text === 'string') {
+			const obj = v as { text: string; mimics?: unknown };
+			return { text: obj.text, mimics: typeof obj.mimics === 'string' ? obj.mimics : null };
+		}
+	} catch {
+		/* pre-mimicking plain-text note — fall through */
+	}
+	return { text: rest, mimics: null };
+}

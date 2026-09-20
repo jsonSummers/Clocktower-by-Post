@@ -202,3 +202,19 @@ export interface PlayerNoteRow {
 	prime_suspect_seat_id: string | null;
 	updated_at: string;
 }
+
+/** Storyteller's pre-written draft for what a seat will be told on a given
+ * night, written ahead of time (e.g. during the day, before that night
+ * falls) so night dispatch is reviewing/sending rather than composing from
+ * scratch. Players never see this — see prep_notes in db/schema.sql and
+ * the "Plan ahead" support in NightDispatch.svelte / actions.ts. `released`
+ * is just an informational "already sent" tag the UI sets, not something
+ * anything else reads. */
+export interface PrepNoteRow {
+	id: string;
+	game_id: string;
+	night: number;
+	seat_id: string;
+	body: string;
+	released: boolean;
+}

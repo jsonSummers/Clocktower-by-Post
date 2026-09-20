@@ -164,3 +164,22 @@ export function resume(phase: PhaseState, resumedAt: number): PhaseState {
 export function adjustDuration(phase: PhaseState, deltaMs: number): PhaseState {
 	return { ...phase, durationMs: Math.max(0, phase.durationMs + deltaMs) };
 }
+
+/**
+ * Milliseconds left in a nomination's debate window (NominationRow's
+ * debate_started_at/debate_seconds — see db/schema.sql), synced the same
+ * way as the phase clock above. Null when the nomination was opened with no
+ * timer at all. Goes negative once the window has run out; this is purely a
+ * Storyteller aid ("a timer might be helpful") — nothing here ends the
+ * debate or advances anything on its own.
+ */
+export function debateRemainingMs(
+	debateStartedAtIso: string,
+	debateSeconds: number | null,
+	clientNow: number,
+	offsetMs: number
+): number | null {
+	if (debateSeconds == null) return null;
+	const serverNow = clientNow + offsetMs;
+	return debateSeconds * 1000 - (serverNow - Date.parse(debateStartedAtIso));
+}

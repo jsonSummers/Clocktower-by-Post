@@ -481,7 +481,15 @@ export function wakeOrder(
 	script: Script,
 	seats: SeatRow[],
 	roleOf: (seatId: string) => string | null,
-	night: number
+	night: number,
+	/** Extra wake steps that don't come from a seat's own assigned character
+	 * — currently just the Amnesiac secretly running another character's
+	 * ability (see amnesiac-abilities.ts and the host page's Seats tab).
+	 * Merged in by that character's own night-order position, so e.g. an
+	 * Amnesiac secretly running the Empath's ability shows up right where
+	 * the Empath normally would. Defaults to none, so every existing caller
+	 * is unaffected. */
+	manualWakes: WakeStep[] = []
 ): WakeStep[] {
 	const order = nightOrder(script, night <= 1);
 	const bySeat = new Map<string, SeatRow>();
@@ -521,6 +529,20 @@ export function wakeOrder(
 		if (character.wakeIfDead && seat.alive) continue;
 		steps.push({ seat, character });
 		included.add(character.id);
+	}
+
+	// Manual wakes are inserted by the position their OWN character's
+	// firstNight/otherNight declares, not appended blindly to the end, so
+	// the Storyteller sees them in the right spot in the queue. They don't
+	// go through `included`/`bySeat` above since they're a second, virtual
+	// "instance" of that character's mechanics for a different seat, not a
+	// real seat_roles assignment.
+	const posOf = (c: Character) => (night <= 1 ? c.firstNight : c.otherNight) ?? Number.POSITIVE_INFINITY;
+	for (const mw of manualWakes) {
+		const p = posOf(mw.character);
+		const idx = steps.findIndex((s) => posOf(s.character) > p);
+		if (idx === -1) steps.push(mw);
+		else steps.splice(idx, 0, mw);
 	}
 	return steps;
 }
