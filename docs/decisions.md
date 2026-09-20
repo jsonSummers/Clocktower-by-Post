@@ -2,6 +2,52 @@
 
 Short records of choices that would otherwise be hard to reconstruct. Newest first.
 
+## 2026-09-19/20 — hosting: self-host on Rosemary + Cloudflare Tunnel chosen; GitHub Pages made to actually work
+
+Mickey asked whether a host's *phone* could act as the server guests' phones
+pull from over the local network. Ruled out — a phone browser tab can't
+accept incoming connections, only a real background process could, which is
+too fragile to build a party UX around. Landed on self-hosting Supabase on
+Rosemary behind a Cloudflare Tunnel instead (works from any network, not
+just shared venue wifi, no free-tier caps) — walkthrough in
+`selfhost/SETUP.md`, including a genuinely free no-domain fallback
+(Cloudflare Quick Tunnel) for anyone who doesn't want to buy a domain.
+
+Follow-up: can the frontend just live on GitHub Pages, free? Yes — the app
+was already a static SPA build, but three things assumed a domain-root
+deploy and would have 404'd on a GitHub Pages *project* page
+(`/reponame/`, not the root):
+
+- Two hardcoded absolute paths (`Avatar.svelte`'s skull image, `/dev`'s
+  "Open ST page" link) — switched to `$app/paths`'s `base`.
+- Ten hardcoded `url('/textures/...')` values in `app.css`'s per-theme
+  custom properties — CSS can't read SvelteKit's `base` path at all, so
+  these are now re-set from JS at runtime instead (`src/lib/textureVars.ts`,
+  new), hooked into both existing theme-toggle call sites so day/night and
+  gothic/lovecraft stay independent, exactly as before.
+- `vite.config.ts` now reads a `BASE_PATH` env var into `paths.base`
+  (confirmed against the installed `@sveltejs/kit@2.70.3` source that
+  passing `KitConfig` straight into the `sveltekit()` vite plugin — which
+  this project already does, there's no `svelte.config.js` — is supported
+  since 2.62.0, rather than assumed).
+
+New `.github/workflows/deploy-pages.yml` builds and deploys on push to
+`main` (or manually), computing `BASE_PATH` automatically and copying
+`build/index.html` → `build/404.html` so a direct/refreshed deep link
+(`/host/ABCD`) boots the SPA instead of GitHub's real 404 page. Chose the
+project-page target over dedicating the one-per-account root
+`<user>.github.io` page — the harder path, done properly rather than
+avoided.
+
+**Verification, honestly**: `npx tsc --noEmit` passes clean after every
+change (run directly on Rosemary). `npm run build`/`npx vitest run` both
+still hit the same native-binary wall as every session before this one
+(`@rolldown/binding-linux-x64-gnu` missing — this bridge's Linux VM isn't
+Rosemary's real Windows/Docker environment) — the actual render was never
+seen by this session, only that it type-checks. Mickey should confirm the
+textures/frames actually paint right via his own `npm run dev` before
+trusting this for a real event.
+
 ## 2026-09-12 — Spy's grimoire, a real RLS bug behind "confirm does nothing", red herring UI, and a nomination/vote system
 
 Feedback from another live-testing pass: "the spy doesn't get to see the

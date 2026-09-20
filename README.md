@@ -183,10 +183,13 @@ canvas size and workflow.
 ## Project layout
 
 ```
+.github/workflows/ GitHub Pages deploy workflow (deploy-pages.yml)
 archive/           retired code from the pre-Supabase artifact prototype (reference only)
+cloudflared/       Cloudflare Tunnel config template, for a self-hosted backend
 design/            the design brief + design/avatar-template.png (painting guide)
 db/schema.sql      full Postgres schema + RLS + RPCs, for the Supabase SQL editor
 docs/              decision log + avatars.md (how to paint the character portraits)
+selfhost/          self-hosting Supabase + GitHub Pages walkthroughs (SETUP.md, GITHUB-PAGES.md)
 static/
   avatars/         character portraits go here as <character-id>.png — see docs/avatars.md
   textures/        optional real photo textures for the theme — see textures/README.md
@@ -212,9 +215,24 @@ src/
     components/      Circle, ClockFace, InfoDrawer, Avatar, GothicDefs, PlayerView
 ```
 
-## Deploying (later)
+## Deploying
 
-Push to a GitHub repo, import it at <https://vercel.com>, add the two
-`PUBLIC_SUPABASE_*` environment variables in the Vercel project settings. Every
-push then deploys. The app is a PWA, so on a phone it installs to the home
-screen from the browser's share menu.
+The app is a static SPA build (`adapter-static`) — deployable to any static
+host, no server runtime needed. It's a PWA too, so on a phone it installs to
+the home screen from the browser's share menu regardless of which of these
+you use.
+
+**Vercel** — push to a GitHub repo, import it at <https://vercel.com>, add
+the two `PUBLIC_SUPABASE_*` environment variables in the project settings.
+Every push then deploys.
+
+**GitHub Pages** — free, via `.github/workflows/deploy-pages.yml` (builds
+and deploys automatically on push to `main`, or manually from the Actions
+tab). One-time setup (enable Pages, add the two `PUBLIC_SUPABASE_*` repo
+secrets) and troubleshooting: [`selfhost/GITHUB-PAGES.md`](selfhost/GITHUB-PAGES.md).
+
+**Backend**: either points at a Supabase project (cloud free tier, as set up
+above) or a self-hosted one on your own machine, tunnelled out with
+Cloudflare (no port-forwarding, works from any network — not just shared
+venue wifi) — including a genuinely free no-domain option (Cloudflare Quick
+Tunnel). Walkthrough: [`selfhost/SETUP.md`](selfhost/SETUP.md).
