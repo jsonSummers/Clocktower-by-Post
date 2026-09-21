@@ -402,12 +402,14 @@
 					</p>
 				{/if}
 
-				{@const poison = poisonStatus(step.seat.id, session.grimoire, session.seats)}
-				{#if poison.poisoned}
-					<p class="drunk-warning">
-						🧪 {seatName(step.seat.id)} is {poison.reason} — the "if poisoned" candidates below are
-						fair game.
-					</p>
+				{#if true}
+					{@const poison = poisonStatus(step.seat.id, session.grimoire, session.seats)}
+					{#if poison.poisoned}
+						<p class="drunk-warning">
+							🧪 {seatName(step.seat.id)} is {poison.reason} — the "if poisoned" candidates below
+							are fair game.
+						</p>
+					{/if}
 				{/if}
 
 				{#if revealOnly}

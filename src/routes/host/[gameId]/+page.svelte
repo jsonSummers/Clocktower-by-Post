@@ -595,30 +595,32 @@
 								Ghost vote: {seat.ghost_vote_available ? 'available' : 'used'}
 							</button>
 						{/if}
-						{@const poison = poisonStatus(seat.id, session.grimoire, session.seats)}
-						{#if poison.poisoned}
-							<div class="row" style="align-items:center;gap:0.4rem">
-								<span class="drunktag">🧪 Poisoned — {poison.reason}</span>
-								<button
-									class="ghostvote"
-									onclick={() =>
-										run(
-											setSeatTokens(
-												supabase,
-												gameId,
-												seat.id,
-												removeToken(
-													session.grimoire.find((g) => g.seat_id === seat.id)?.tokens,
-													'poisoned',
-													poison.source ?? 'cannibal'
+						{#if true}
+							{@const poison = poisonStatus(seat.id, session.grimoire, session.seats)}
+							{#if poison.poisoned}
+								<div class="row" style="align-items:center;gap:0.4rem">
+									<span class="drunktag">🧪 Poisoned — {poison.reason}</span>
+									<button
+										class="ghostvote"
+										onclick={() =>
+											run(
+												setSeatTokens(
+													supabase,
+													gameId,
+													seat.id,
+													removeToken(
+														session.grimoire.find((g) => g.seat_id === seat.id)?.tokens,
+														'poisoned',
+														poison.source ?? 'cannibal'
+													)
 												)
-											)
-										)}
-									title="Manually clear this poison token"
-								>
-									Clear
-								</button>
-							</div>
+											)}
+										title="Manually clear this poison token"
+									>
+										Clear
+									</button>
+								</div>
+							{/if}
 						{/if}
 						{#if scriptHasDrunk}
 							{#if isDrunk(seat.id)}
